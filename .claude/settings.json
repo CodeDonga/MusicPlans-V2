@@ -1,0 +1,13 @@
+{
+  "enabledPlugins": {
+    "expo@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "Bash(pnpm start)",
+      "Bash(pnpm install)"
+    ]
+  }
+}

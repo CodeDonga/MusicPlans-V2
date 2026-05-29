@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "MusicPlans",
+    "slug": "musicplans-v2",
+    "version": "1.0.0",
+    "scheme": "musicplans",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#001230"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.csoto.musicplans"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#001230"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.csoto.musicplans"
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "@react-native-community/datetimepicker"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "34548333-7746-4e36-a571-a881f740bc14"
+      }
+    }
+  }
+}
