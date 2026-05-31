@@ -42,11 +42,22 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="finanzas"
+        options={{
+          title: 'Finanzas',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>💰</Text>,
+        }}
+      />
+      <Tabs.Screen
         name="ajustes"
         options={{
           title: 'Ajustes',
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>⚙️</Text>,
         }}
+      />
+      <Tabs.Screen
+        name="perfil"
+        options={{ href: null }}
       />
     </Tabs>
   );

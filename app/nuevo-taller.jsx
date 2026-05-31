@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, ScrollView, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFonts, Inter_400Regular, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
@@ -25,7 +25,7 @@ export default function NuevoTaller() {
   const { tema, paleta } = useTema();
 
   const [nombre, setNombre] = useState('');
-  const [instrumento, setInstrumento] = useState(null);
+  const [instrumentos, setInstrumentos] = useState([]);
   const [valorPorAlumno, setValorPorAlumno] = useState('');
   const [diaSemana, setDiaSemana] = useState('Lunes');
   const [hora, setHora] = useState(new Date());
@@ -48,17 +48,30 @@ export default function NuevoTaller() {
     }
   }
 
-  function handleGuardar() {
-    if (!nombre || !instrumento) return;
-    agregarTaller({
+  function toggleInstrumento(inst) {
+    const yaEsta = instrumentos.find(i => i.nombre === inst.nombre);
+    if (yaEsta) {
+      setInstrumentos(instrumentos.filter(i => i.nombre !== inst.nombre));
+    } else {
+      setInstrumentos([...instrumentos, inst]);
+    }
+  }
+
+  async function handleGuardar() {
+    if (!nombre || instrumentos.length === 0) return;
+    const result = await agregarTaller({
       nombre,
-      instrumento: instrumento.nombre,
-      avatar: instrumento.emoji,
+      instrumento: instrumentos.map(i => i.nombre).join(', '),
+      avatar: instrumentos.map(i => i.emoji).slice(0, 2).join(''),
       valorPorAlumno: parseInt(valorPorAlumno) || 0,
       diaSemana,
       hora: horaFormateada,
       participantes: participantesSeleccionados,
     });
+    if (result?.error) {
+      Alert.alert('Error al guardar', result.error);
+      return;
+    }
     router.back();
   }
 
@@ -83,9 +96,9 @@ export default function NuevoTaller() {
           <Text style={s.label}>Instrumento / Disciplina</Text>
           <View style={s.instrumentosGrid}>
             {INSTRUMENTOS.map(inst => {
-              const sel = instrumento?.nombre === inst.nombre;
+              const sel = !!instrumentos.find(i => i.nombre === inst.nombre);
               return (
-                <TouchableOpacity key={inst.nombre} style={[s.instrBtn, sel && s.instrBtnActivo]} onPress={() => setInstrumento(inst)} activeOpacity={0.7}>
+                <TouchableOpacity key={inst.nombre} style={[s.instrBtn, sel && s.instrBtnActivo]} onPress={() => toggleInstrumento(inst)} activeOpacity={0.7}>
                   <Text style={s.instrEmoji}>{inst.emoji}</Text>
                   <Text style={[s.instrNombre, sel && s.instrNombreActivo]}>{inst.nombre}</Text>
                 </TouchableOpacity>

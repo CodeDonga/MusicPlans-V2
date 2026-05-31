@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { programarNotificacion, cancelarNotificacion } from '../lib/notificaciones';
 
 const AlumnosContext = createContext(null);
 
@@ -7,6 +8,7 @@ export function AlumnosProvider({ children }) {
   const [alumnos, setAlumnos] = useState([]);
   const [talleres, setTalleres] = useState([]);
   const [clases, setClases] = useState({});
+  const [pagosHistoricos, setPagosHistoricos] = useState([]);
   const userIdRef = useRef(null);
 
   useEffect(() => {
@@ -19,6 +21,7 @@ export function AlumnosProvider({ children }) {
         setAlumnos([]);
         setTalleres([]);
         setClases({});
+        setPagosHistoricos([]);
       }
     });
     return () => subscription.unsubscribe();
@@ -30,14 +33,36 @@ export function AlumnosProvider({ children }) {
       supabase.from('talleres').select('*').order('created_at'),
       supabase.from('clases').select('*').order('created_at', { ascending: false }),
     ]);
+
+    const todasIds = new Set([
+      ...(aData || []).map(a => a.id),
+      ...(tData || []).map(t => t.id),
+    ]);
+
     setAlumnos((aData || []).map(dbToAlumno));
     setTalleres((tData || []).map(dbToTaller));
+
     const mapa = {};
+    const historico = {};
+
     (cData || []).forEach(c => {
-      if (!mapa[c.entidad_id]) mapa[c.entidad_id] = [];
-      mapa[c.entidad_id].push(dbToClase(c));
+      if (todasIds.has(c.entidad_id)) {
+        if (!mapa[c.entidad_id]) mapa[c.entidad_id] = [];
+        mapa[c.entidad_id].push(dbToClase(c));
+      } else if (c.pagada) {
+        if (!historico[c.entidad_id]) {
+          historico[c.entidad_id] = {
+            nombre: c.entidad_nombre || 'Eliminado',
+            valorUnitario: c.valor_unitario || 0,
+            clases: [],
+          };
+        }
+        historico[c.entidad_id].clases.push(dbToClase(c));
+      }
     });
+
     setClases(mapa);
+    setPagosHistoricos(Object.values(historico));
   }
 
   // --- Mappers DB ↔ App ---
@@ -106,6 +131,10 @@ export function AlumnosProvider({ children }) {
       planificacion: row.planificacion,
       tareas: row.tareas,
       estado: row.estado,
+      pagada: row.pagada || false,
+      entidadNombre: row.entidad_nombre || '',
+      valorUnitario: row.valor_unitario || 0,
+      valorCustom: row.valor_custom ?? null,
     };
   }
 
@@ -139,9 +168,20 @@ export function AlumnosProvider({ children }) {
   }
 
   async function eliminarAlumno(id) {
+    const entidad = alumnos.find(a => a.id === id);
+    const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
+
     setAlumnos(prev => prev.filter(a => a.id !== id));
     setClases(prev => { const n = { ...prev }; delete n[id]; return n; });
-    await supabase.from('clases').delete().eq('entidad_id', id);
+
+    if (clasesPagadas.length > 0) {
+      setPagosHistoricos(prev => [
+        ...prev,
+        { nombre: entidad?.nombre || 'Alumno eliminado', valorUnitario: entidad?.valorClase || 0, clases: clasesPagadas },
+      ]);
+    }
+
+    await supabase.from('clases').delete().eq('entidad_id', id).or('pagada.eq.false,pagada.is.null');
     const { error } = await supabase.from('alumnos').delete().eq('id', id);
     if (error) cargarDatos();
   }
@@ -159,11 +199,12 @@ export function AlumnosProvider({ children }) {
       .single();
 
     if (error || !data) {
+      console.error('Error al guardar taller:', error?.message, error?.details, error?.hint);
       setTalleres(prev => prev.filter(t => t.id !== tempId));
-      return;
+      return { error: error?.message || 'Error desconocido' };
     }
     setTalleres(prev => prev.map(t => t.id === tempId ? dbToTaller(data) : t));
-    return data.id;
+    return { id: data.id };
   }
 
   async function editarTaller(tallerActualizado) {
@@ -176,9 +217,21 @@ export function AlumnosProvider({ children }) {
   }
 
   async function eliminarTaller(id) {
+    const entidad = talleres.find(t => t.id === id);
+    const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
+    const valorUnitario = (entidad?.valorPorAlumno || 0) * (entidad?.participantes?.length || 1);
+
     setTalleres(prev => prev.filter(t => t.id !== id));
     setClases(prev => { const n = { ...prev }; delete n[id]; return n; });
-    await supabase.from('clases').delete().eq('entidad_id', id);
+
+    if (clasesPagadas.length > 0) {
+      setPagosHistoricos(prev => [
+        ...prev,
+        { nombre: entidad?.nombre || 'Taller eliminado', valorUnitario, clases: clasesPagadas },
+      ]);
+    }
+
+    await supabase.from('clases').delete().eq('entidad_id', id).or('pagada.eq.false,pagada.is.null');
     const { error } = await supabase.from('talleres').delete().eq('id', id);
     if (error) cargarDatos();
   }
@@ -194,6 +247,9 @@ export function AlumnosProvider({ children }) {
 
     const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
     const entidadTipo = entidad?.tipo || 'alumno';
+    const valorUnitario = entidad?.tipo === 'taller'
+      ? (entidad.valorPorAlumno || 0) * (entidad.participantes?.length || 1)
+      : (entidad?.valorClase || 0);
 
     const { data, error } = await supabase
       .from('clases')
@@ -201,6 +257,9 @@ export function AlumnosProvider({ children }) {
         user_id: userIdRef.current,
         entidad_id: entidadId,
         entidad_tipo: entidadTipo,
+        entidad_nombre: entidad?.nombre || '',
+        valor_unitario: valorUnitario,
+        valor_custom: clase.valorCustom ?? null,
         fecha: clase.fecha,
         hora: clase.hora,
         planificacion: clase.planificacion,
@@ -221,6 +280,9 @@ export function AlumnosProvider({ children }) {
       ...prev,
       [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? dbToClase(data) : c),
     }));
+    if (clase.estado !== 'cancelada') {
+      programarNotificacion(data.id, entidad?.nombre || '', clase.fecha, clase.hora);
+    }
   }
 
   async function editarClase(entidadId, claseActualizada) {
@@ -236,9 +298,16 @@ export function AlumnosProvider({ children }) {
         planificacion: claseActualizada.planificacion,
         tareas: claseActualizada.tareas,
         estado: claseActualizada.estado,
+        valor_custom: claseActualizada.valorCustom ?? null,
       })
       .eq('id', claseActualizada.id);
     if (error) cargarDatos();
+    if (claseActualizada.estado === 'cancelada') {
+      cancelarNotificacion(claseActualizada.id);
+    } else {
+      const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
+      programarNotificacion(claseActualizada.id, entidad?.nombre || '', claseActualizada.fecha, claseActualizada.hora);
+    }
   }
 
   async function eliminarClase(entidadId, claseId) {
@@ -246,6 +315,7 @@ export function AlumnosProvider({ children }) {
       ...prev,
       [entidadId]: (prev[entidadId] || []).filter(c => c.id !== claseId),
     }));
+    cancelarNotificacion(claseId);
     const { error } = await supabase.from('clases').delete().eq('id', claseId);
     if (error) cargarDatos();
   }
@@ -257,14 +327,26 @@ export function AlumnosProvider({ children }) {
     }));
     const { error } = await supabase.from('clases').update({ estado }).eq('id', claseId);
     if (error) cargarDatos();
+    if (estado === 'cancelada') {
+      cancelarNotificacion(claseId);
+    }
+  }
+
+  async function togglePagadaClase(entidadId, claseId, pagada) {
+    setClases(prev => ({
+      ...prev,
+      [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, pagada } : c),
+    }));
+    const { error } = await supabase.from('clases').update({ pagada }).eq('id', claseId);
+    if (error) cargarDatos();
   }
 
   return (
     <AlumnosContext.Provider value={{
-      alumnos, talleres, clases,
+      alumnos, talleres, clases, pagosHistoricos,
       agregarAlumno, editarAlumno, eliminarAlumno,
       agregarTaller, editarTaller, eliminarTaller,
-      agregarClase, editarClase, eliminarClase, cambiarEstadoClase,
+      agregarClase, editarClase, eliminarClase, cambiarEstadoClase, togglePagadaClase,
     }}>
       {children}
     </AlumnosContext.Provider>

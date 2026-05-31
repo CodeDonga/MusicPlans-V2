@@ -43,6 +43,11 @@ export function AuthProvider({ children }) {
     if (error) throw error
   }
 
+  async function updatePerfil(nombre) {
+    const { error } = await supabase.auth.updateUser({ data: { nombre } })
+    if (error) throw error
+  }
+
   async function signInWithGoogle() {
     const redirectUrl = Linking.createURL('/')
     const { data, error } = await supabase.auth.signInWithOAuth({
@@ -57,7 +62,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, loading, signIn, signUp, signOut, signInWithGoogle }}>
+    <AuthContext.Provider value={{ session, loading, signIn, signUp, signOut, signInWithGoogle, updatePerfil }}>
       {children}
     </AuthContext.Provider>
   )
