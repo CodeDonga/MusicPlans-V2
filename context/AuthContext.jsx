@@ -13,6 +13,7 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [recuperandoPassword, setRecuperandoPassword] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -20,11 +21,30 @@ export function AuthProvider({ children }) {
       setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session)
+      if (event === 'PASSWORD_RECOVERY') setRecuperandoPassword(true)
     })
 
     return () => subscription.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    async function manejarRecoveryUrl(url) {
+      if (!url || !url.includes('type=recovery')) return
+      const hash = url.split('#')[1]
+      if (!hash) return
+      const params = new URLSearchParams(hash)
+      const access_token = params.get('access_token')
+      const refresh_token = params.get('refresh_token')
+      if (access_token && refresh_token) {
+        await supabase.auth.setSession({ access_token, refresh_token })
+        setRecuperandoPassword(true)
+      }
+    }
+    Linking.getInitialURL().then(manejarRecoveryUrl)
+    const sub = Linking.addEventListener('url', ({ url }) => manejarRecoveryUrl(url))
+    return () => sub.remove()
   }, [])
 
   async function signIn(email, password) {
@@ -49,6 +69,17 @@ export function AuthProvider({ children }) {
   async function updatePerfil(nombre) {
     const { error } = await supabase.auth.updateUser({ data: { nombre } })
     if (error) throw error
+  }
+
+  async function resetPassword(email) {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: OAUTH_REDIRECT })
+    if (error) throw error
+  }
+
+  async function updatePassword(password) {
+    const { error } = await supabase.auth.updateUser({ password })
+    if (error) throw error
+    setRecuperandoPassword(false)
   }
 
   async function signInWithGoogle() {
@@ -125,7 +156,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, loading, signIn, signUp, signOut, signInWithGoogle, updatePerfil, conectarCalendar, desconectarCalendar, getCalendarToken }}>
+    <AuthContext.Provider value={{ session, loading, signIn, signUp, signOut, signInWithGoogle, updatePerfil, conectarCalendar, desconectarCalendar, getCalendarToken, resetPassword, updatePassword, recuperandoPassword }}>
       {children}
     </AuthContext.Provider>
   )

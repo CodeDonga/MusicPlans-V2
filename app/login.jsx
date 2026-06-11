@@ -9,10 +9,11 @@ import { useAuth } from '../context/AuthContext';
 export default function Login() {
   const router = useRouter();
   const { tema, paleta } = useTema();
-  const { signIn, signInWithGoogle } = useAuth();
+  const { signIn, signInWithGoogle, resetPassword } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [mensaje, setMensaje] = useState('');
   const [cargando, setCargando] = useState(false);
 
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
@@ -30,6 +31,7 @@ export default function Login() {
       return;
     }
     setError('');
+    setMensaje('');
     setCargando(true);
     try {
       await signIn(email, password);
@@ -37,6 +39,21 @@ export default function Login() {
       setError(e.message || 'Error al iniciar sesión.');
     } finally {
       setCargando(false);
+    }
+  }
+
+  async function handleOlvide() {
+    setMensaje('');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError('Ingresa tu correo para enviarte el link de recuperación.');
+      return;
+    }
+    setError('');
+    try {
+      await resetPassword(email.trim());
+      setMensaje('Te enviamos un correo para restablecer tu contraseña.');
+    } catch (e) {
+      setError(e.message || 'No se pudo enviar el correo.');
     }
   }
 
@@ -80,11 +97,12 @@ export default function Login() {
               secureTextEntry
             />
 
-            <TouchableOpacity style={s.linkOlvide}>
+            <TouchableOpacity style={s.linkOlvide} onPress={handleOlvide}>
               <Text style={s.linkTexto}>¿Olvidaste tu contraseña?</Text>
             </TouchableOpacity>
 
             {error ? <Text style={s.errorTexto}>{error}</Text> : null}
+            {mensaje ? <Text style={s.mensajeTexto}>{mensaje}</Text> : null}
 
             <TouchableOpacity style={[s.btnPrimario, cargando && { opacity: 0.7 }]} onPress={handleLogin} activeOpacity={0.85} disabled={cargando}>
               {cargando
@@ -148,6 +166,7 @@ function makeStyles(p) {
     },
 
     errorTexto: { color: p.alert, fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 12, textAlign: 'center' },
+    mensajeTexto: { color: p.success, fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 12, textAlign: 'center' },
 
     linkOlvide: { alignSelf: 'flex-end', marginTop: 8, marginBottom: 4 },
     linkTexto: { color: p.primary, fontSize: 12, fontFamily: 'Inter_600SemiBold' },

@@ -12,7 +12,7 @@ LogBox.ignoreLogs(['expo-notifications: Android Push notifications'])
 configurarNotificaciones()
 
 function AuthGate() {
-  const { session, loading } = useAuth()
+  const { session, loading, recuperandoPassword } = useAuth()
   const router = useRouter()
   const segments = useSegments()
 
@@ -23,12 +23,14 @@ function AuthGate() {
   useEffect(() => {
     if (loading) return
     const rutasPublicas = ['login', 'registro']
-    if (!session && !rutasPublicas.includes(segments[0])) {
+    if (session && recuperandoPassword && segments[0] !== 'nueva-contrasena') {
+      router.replace('/nueva-contrasena')
+    } else if (!session && !rutasPublicas.includes(segments[0])) {
       router.replace('/login')
-    } else if (session && rutasPublicas.includes(segments[0])) {
+    } else if (session && !recuperandoPassword && rutasPublicas.includes(segments[0])) {
       router.replace('/(tabs)/agenda')
     }
-  }, [session, loading, segments])
+  }, [session, loading, segments, recuperandoPassword])
 
   return null
 }
@@ -42,6 +44,7 @@ export default function RootLayout() {
           <Stack>
             <Stack.Screen name="login" options={{ headerShown: false }} />
             <Stack.Screen name="registro" options={{ headerShown: false }} />
+            <Stack.Screen name="nueva-contrasena" options={{ headerShown: false }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
             <Stack.Screen name="nuevo-alumno" options={{ headerShown: false }} />
             <Stack.Screen name="nuevo-taller" options={{ headerShown: false }} />

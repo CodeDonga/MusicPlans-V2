@@ -16,8 +16,9 @@
 ### Conexión
 - [ ] El profesor puede conectar su Google Calendar desde la pantalla Ajustes.
 - [ ] La conexión solicita el scope `calendar.events` con `access_type: offline`.
-- [ ] El `provider_token` (token de Google) se guarda en `user_metadata.google_calendar_token`.
-- [ ] Si no hay token conectado → las funciones de calendario fallan silenciosamente (sin error visible al usuario).
+- [ ] **El token de Google nunca se persiste** (BUG-07/BUG-21): vive solo en `session.provider_token`. En `user_metadata` se guarda únicamente el flag `google_calendar_connected`.
+- [ ] Si no hay token disponible → las funciones de calendario fallan silenciosamente (sin error visible al usuario).
+- [ ] Si Google responde 401 (token vencido) → se lanza `TOKEN_EXPIRADO`, `safeGCal` avisa con Alert y pide reconectar desde Ajustes.
 
 ### Crear evento
 - [ ] Al crear una clase con estado != `cancelada` → intenta crear un evento en Google Calendar.
@@ -33,8 +34,17 @@
 - [ ] Al eliminar una clase con `google_event_id` → elimina el evento de Google Calendar.
 - [ ] Al cancelar una clase con `google_event_id` → elimina el evento de Google Calendar.
 
-### Conflictos de horario
-- [ ] Si al crear una clase hay conflicto de horario → alerta al profesor y pregunta si reagendar. _(por definir implementación)_
+### Conflictos de horario (GC-06)
+
+Definición: la detección es **local**, contra las clases de la app (no consulta la API de Google — eso queda como mejora futura vía freeBusy).
+
+- [ ] Un conflicto existe cuando otra clase **no cancelada** (de cualquier alumno/taller) cae en la misma fecha y sus ventanas de 60 minutos se superponen (`|inicioA − inicioB| < 60 min`).
+- [ ] Al guardar una clase nueva con conflicto → Alert "Conflicto de horario: ya tienes una clase con {nombre} a las {hora}hs ese día. ¿Guardar igual?" con botones Cancelar / Guardar igual.
+- [ ] Al editar una clase, la propia clase se excluye de la comparación.
+- [ ] "Guardar igual" guarda la clase normalmente; "Cancelar" mantiene el formulario abierto sin efectos.
+
+### Reactivación (BUG-23)
+- [ ] Al reactivar una clase cancelada (por cambio de estado o edición) sin `google_event_id` → se crea un evento nuevo y se persiste su id.
 
 ---
 
@@ -49,5 +59,5 @@
 
 ## Estado actual
 
-- **Implementado:** `crearEvento`, `editarEvento`, `eliminarEvento` en `lib/googleCalendar.js`.
-- **Pendiente:** manejo de token vencido (refresh automático), detección de conflictos.
+- **Implementado:** `crearEvento`, `editarEvento`, `eliminarEvento`, aviso de token vencido (`TOKEN_EXPIRADO` + Alert), recreación de evento al reactivar, detección local de conflictos (GC-06).
+- **Pendiente (GC-05):** refresh automático del token. **Bloqueado**: requiere una Edge Function con el client secret de Google para canjear el `provider_refresh_token` — no puede hacerse de forma segura desde el cliente. Retomar cuando exista backend (la infra de pagos traerá Edge Functions).

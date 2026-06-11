@@ -59,7 +59,7 @@
 | A-04 | Persistencia de sesión entre aperturas | ✅ | autenticacion.md |
 | A-05 | Logout limpia todos los estados de contexto | ✅ | autenticacion.md |
 | A-06 | Validaciones inline en formularios (sin Alert) | ✅ | autenticacion.md — login y registro muestran errores inline (`setError` + texto bajo el formulario) |
-| A-07 | Flujo "Olvidaste tu contraseña?" | ⬜ | autenticacion.md |
+| A-07 | Flujo "Olvidaste tu contraseña?" | ✅ | autenticacion.md — `resetPasswordForEmail` desde login (mensaje inline), deep link `type=recovery` en AuthContext, pantalla `nueva-contrasena.jsx`, AuthGate enruta durante recuperación. Pendiente probar en dispositivo |
 
 ---
 
@@ -106,8 +106,8 @@
 |---|---|---|---|
 | AG-01 | Lista de próximas sesiones ordenada | ✅ | agenda.md |
 | AG-02 | Navegación a perfil desde sesión | ✅ | agenda.md |
-| AG-03 | Agrupación por fecha con encabezado de día | ⬜ | agenda.md |
-| AG-04 | Estado vacío con mensaje | ⬜ | agenda.md |
+| AG-03 | Agrupación por fecha con encabezado de día | ✅ | agenda.md — satisfecha por el rediseño calendario: el timeline muestra un día con encabezado "Agenda: {Día} {N}". Spec actualizada al diseño vigente |
+| AG-04 | Estado vacío con mensaje | ✅ | agenda.md — "Sin clases este día" en el timeline del día seleccionado |
 
 ---
 
@@ -158,8 +158,8 @@
 | GC-02 | Crear evento al agregar clase (incluye planificación y tarea) | ✅ | google-calendar.md |
 | GC-03 | Editar evento al editar clase (incluye planificación y tarea) | ✅ | google-calendar.md |
 | GC-04 | Eliminar evento al cancelar/eliminar clase | ✅ | google-calendar.md |
-| GC-05 | Manejo de token vencido (avisa al usuario con Alert, pendiente refresh automático) | 🔄 | google-calendar.md |
-| GC-06 | Detección de conflictos de horario | ⬜ | google-calendar.md |
+| GC-05 | Manejo de token vencido (avisa al usuario con Alert, pendiente refresh automático) | 🚫 | google-calendar.md — bloqueada: el refresh requiere Edge Function con el client secret de Google (no es seguro client-side). Retomar cuando exista backend (infra de pagos) |
+| GC-06 | Detección de conflictos de horario | ✅ | google-calendar.md — detección local en `perfil.jsx:buscarConflicto`: solapamiento de ventanas de 60 min entre clases no canceladas, Alert "¿Guardar igual?" al crear y al editar. freeBusy de Google queda como mejora futura |
 
 ---
 

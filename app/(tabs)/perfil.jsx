@@ -6,7 +6,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import { useAlumnos } from '../../context/AlumnosContext';
 import { useTema } from '../../context/TemaContext';
-import { parseFecha } from '../../lib/fechas';
+import { parseFecha, isSameDay } from '../../lib/fechas';
 
 const ESTADOS = ['pendiente', 'realizada', 'cancelada', 'reagendada'];
 const ESTADO_LABEL = { pendiente: 'Pendiente', realizada: 'Realizada', cancelada: 'Cancelada', reagendada: 'Reagendada' };
@@ -128,6 +128,27 @@ function PerfilContent({ id, tipo }) {
   const fechaFormateada = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   const horaFormateada = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
+  function buscarConflicto(fechaStr, horaStr, claseIdExcluir) {
+    const fecha = parseFecha(fechaStr);
+    const [h, m] = (horaStr || '').split(':').map(Number);
+    if (!fecha || isNaN(h)) return null;
+    const inicio = h * 60 + (m || 0);
+    for (const [eid, lista] of Object.entries(clases)) {
+      for (const c of lista) {
+        if (c.id === claseIdExcluir || c.estado === 'cancelada') continue;
+        const f = parseFecha(c.fecha);
+        if (!f || !isSameDay(f, fecha)) continue;
+        const [ch, cm] = (c.hora || '').split(':').map(Number);
+        if (isNaN(ch)) continue;
+        if (Math.abs((ch * 60 + (cm || 0)) - inicio) < 60) {
+          const otraEntidad = alumnos.find(a => a.id === eid) || talleres.find(t => t.id === eid);
+          return { ...c, nombreEntidad: otraEntidad?.nombre || c.entidadNombre || 'otro alumno' };
+        }
+      }
+    }
+    return null;
+  }
+
   function handleAgregarClase() {
     if (nuevoValorCustom) {
       const v = parseInt(nuevoValorCustom);
@@ -136,6 +157,22 @@ function PerfilContent({ id, tipo }) {
         return;
       }
     }
+    const conflicto = buscarConflicto(fechaFormateada(nuevaFecha), horaFormateada(nuevaHora), null);
+    if (conflicto) {
+      Alert.alert(
+        'Conflicto de horario',
+        `Ya tienes una clase con ${conflicto.nombreEntidad} a las ${conflicto.hora}hs ese día. ¿Guardar igual?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Guardar igual', onPress: guardarNuevaClase },
+        ]
+      );
+      return;
+    }
+    guardarNuevaClase();
+  }
+
+  function guardarNuevaClase() {
     agregarClase(id, {
       fecha: fechaFormateada(nuevaFecha),
       hora: horaFormateada(nuevaHora),
@@ -243,6 +280,24 @@ function PerfilContent({ id, tipo }) {
         return;
       }
     }
+    const conflicto = editEstado !== 'cancelada'
+      ? buscarConflicto(fechaFormateada(editFechaClase), horaFormateada(editHoraClase), claseEditando.id)
+      : null;
+    if (conflicto) {
+      Alert.alert(
+        'Conflicto de horario',
+        `Ya tienes una clase con ${conflicto.nombreEntidad} a las ${conflicto.hora}hs ese día. ¿Guardar igual?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Guardar igual', onPress: guardarClaseEditada },
+        ]
+      );
+      return;
+    }
+    guardarClaseEditada();
+  }
+
+  function guardarClaseEditada() {
     editarClase(id, {
       ...claseEditando,
       planificacion: editPlanificacion,
