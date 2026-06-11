@@ -155,16 +155,13 @@ export function AlumnosProvider({ children }) {
 
   async function getGoogleToken() {
     const { data: { session } } = await supabase.auth.getSession();
-    return session?.provider_token
-      ?? session?.user?.user_metadata?.google_provider_token
-      ?? null;
+    return session?.provider_token ?? null;
   }
 
   async function safeGCal(fn) {
     try { return await fn(); }
     catch (e) {
       if (e.message === 'TOKEN_EXPIRADO') {
-        supabase.auth.updateUser({ data: { google_provider_token: null } });
         Alert.alert('Google Calendar desconectado', 'El acceso a Calendar expiró. Ve a Ajustes y vuelve a conectar Google Calendar.');
       }
       return null;
@@ -185,6 +182,27 @@ export function AlumnosProvider({ children }) {
       valorCustom: row.valor_custom ?? null,
       googleEventId: row.google_event_id ?? null,
     };
+  }
+
+  async function recrearEventoGCal(token, entidadId, clase, entidadNombre) {
+    const googleEventId = await safeGCal(() => crearEvento(token, clase, entidadNombre));
+    if (!googleEventId) return;
+    await supabase.from('clases').update({ google_event_id: googleEventId }).eq('id', clase.id);
+    setClases(prev => ({
+      ...prev,
+      [entidadId]: (prev[entidadId] || []).map(c => c.id === clase.id ? { ...c, googleEventId } : c),
+    }));
+  }
+
+  async function limpiarClasesBorradas(clasesBorradas) {
+    clasesBorradas.forEach(c => cancelarNotificacion(c.id));
+    const conEvento = clasesBorradas.filter(c => c.googleEventId);
+    if (conEvento.length === 0) return;
+    const token = await getGoogleToken();
+    if (!token) return;
+    for (const c of conEvento) {
+      await safeGCal(() => eliminarEvento(token, c.googleEventId));
+    }
   }
 
   // --- ALUMNOS ---
@@ -219,11 +237,14 @@ export function AlumnosProvider({ children }) {
   async function eliminarAlumno(id) {
     const entidad = alumnos.find(a => a.id === id);
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
+    const clasesBorradas = (clases[id] || []).filter(c => !c.pagada);
 
     await supabase.from('clases').delete().eq('entidad_id', id).eq('pagada', false);
     await supabase.from('clases').delete().eq('entidad_id', id).is('pagada', null);
     const { error } = await supabase.from('alumnos').delete().eq('id', id);
     if (error) { cargarDatos(); return; }
+
+    await limpiarClasesBorradas(clasesBorradas);
 
     setAlumnos(prev => prev.filter(a => a.id !== id));
     setClases(prev => { const n = { ...prev }; delete n[id]; return n; });
@@ -249,7 +270,6 @@ export function AlumnosProvider({ children }) {
       .single();
 
     if (error || !data) {
-      console.error('Error al guardar taller:', error?.message, error?.details, error?.hint);
       setTalleres(prev => prev.filter(t => t.id !== tempId));
       return { error: error?.message || 'Error desconocido' };
     }
@@ -269,12 +289,15 @@ export function AlumnosProvider({ children }) {
   async function eliminarTaller(id) {
     const entidad = talleres.find(t => t.id === id);
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
+    const clasesBorradas = (clases[id] || []).filter(c => !c.pagada);
     const valorUnitario = (entidad?.valorPorAlumno || 0) * (entidad?.participantes?.length || 1);
 
     await supabase.from('clases').delete().eq('entidad_id', id).eq('pagada', false);
     await supabase.from('clases').delete().eq('entidad_id', id).is('pagada', null);
     const { error } = await supabase.from('talleres').delete().eq('id', id);
     if (error) { cargarDatos(); return; }
+
+    await limpiarClasesBorradas(clasesBorradas);
 
     setTalleres(prev => prev.filter(t => t.id !== id));
     setClases(prev => { const n = { ...prev }; delete n[id]; return n; });
@@ -346,7 +369,6 @@ export function AlumnosProvider({ children }) {
           }
         } catch (e) {
           if (e.message === 'TOKEN_EXPIRADO') {
-            supabase.auth.updateUser({ data: { google_provider_token: null } });
             Alert.alert('Google Calendar desconectado', 'El acceso a Calendar expiró. Ve a Ajustes y vuelve a conectar Google Calendar.');
           }
         }
@@ -395,9 +417,13 @@ export function AlumnosProvider({ children }) {
       }
     } else {
       programarNotificacion(claseActualizada.id, entidad?.nombre || '', claseActualizada.fecha, claseActualizada.hora);
-      if (claseActualizada.googleEventId) {
-        const token = await getGoogleToken();
-        if (token) await safeGCal(() => editarEvento(token, claseActualizada.googleEventId, claseActualizada, entidad?.nombre || ''));
+      const token = await getGoogleToken();
+      if (token) {
+        if (claseActualizada.googleEventId) {
+          await safeGCal(() => editarEvento(token, claseActualizada.googleEventId, claseActualizada, entidad?.nombre || ''));
+        } else {
+          await recrearEventoGCal(token, entidadId, claseActualizada, entidad?.nombre || '');
+        }
       }
     }
   }
@@ -441,6 +467,10 @@ export function AlumnosProvider({ children }) {
     } else if (estadoPrevio === 'cancelada' && clase) {
       const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
       programarNotificacion(claseId, entidad?.nombre || '', clase.fecha, clase.hora);
+      if (!clase.googleEventId) {
+        const token = await getGoogleToken();
+        if (token) await recrearEventoGCal(token, entidadId, { ...clase, estado }, entidad?.nombre || '');
+      }
     }
   }
 

@@ -2,8 +2,7 @@
 > Tareas atómicas y verificables. Cada tarea tiene un criterio de aceptación claro.  
 > Estado: ✅ Hecho | 🔄 En progreso | ⬜ Pendiente | 🚫 Bloqueado
 >
-> **Bugs conocidos documentados al revisar el código (pendientes de corrección):**
-> BUG-20 · BUG-21 · BUG-22 · BUG-23 · BUG-24 · BUG-25 · BUG-26 · BUG-27 · ARQ-07 · ARQ-08
+> **Bugs conocidos:** sin pendientes — BUG-20..27, ARQ-07..09 corregidos el 2026-06-11.
 
 ---
 
@@ -36,16 +35,16 @@
 | BUG-17 | Fallo silencioso al editar/eliminar evento en Google Calendar | ✅ | `lib/googleCalendar.js` — `editarEvento`/`eliminarEvento` detectan 401 y lanzan `TOKEN_EXPIRADO`; `AlumnosContext` los envuelve en helper `safeGCal` que avisa al usuario y limpia el token |
 | BUG-18 | `perfil.jsx` no resincroniza estados de edición al cambiar entidad | ✅ | Split: `Perfil` wrapper extrae `id`/`tipo` y renderiza `<PerfilContent key={tipo-id} ... />`. Al cambiar de entidad React desmonta y reinicia todos los estados internos |
 | BUG-19 | `hoy` en agenda.jsx aún memoizado sin deps (BUG-05 incompleto) | ✅ | `agenda.jsx:20` — reemplazado por `const hoy = new Date()` (sin useMemo); ahora se reevalúa en cada render y sigue al cambio de día |
-| BUG-20 | Cerrar sesión sin confirmación (regresión de AJ-07) | ⬜ | `ajustes.jsx:195` — el botón llama `signOut` directo. Debe mostrar Alert de confirmación antes de cerrar sesión |
-| BUG-21 | Token Calendar de corta vida en metadata (regresión de BUG-07) | ⬜ | `AlumnosContext.jsx:156-161` — `getGoogleToken()` aún tiene fallback a `user_metadata.google_provider_token`; `AuthContext.jsx:107` lo sigue guardando. El token dura ~1h: el fallback entrega tokens muertos. Eliminar fallback y escritura en metadata |
-| BUG-22 | Eliminar alumno/taller deja notificaciones y eventos gCal huérfanos | ⬜ | `AlumnosContext.jsx:219-237, 269-288` — borra las clases en DB pero no cancela sus notificaciones programadas ni elimina los eventos de Google Calendar asociados |
-| BUG-23 | Reactivar clase cancelada no recrea el evento de Google Calendar | ⬜ | `AlumnosContext.jsx:441-444` y `editarClase` — BUG-08 re-programa la notificación, pero `googleEventId` se anuló al cancelar y el evento no se vuelve a crear |
-| BUG-24 | `shouldShowAlert` deprecado en expo-notifications SDK 54 | ⬜ | `lib/notificaciones.js:8` — reemplazar por `shouldShowBanner` + `shouldShowList` (doc v54). Con el handler actual la notificación puede no mostrarse en primer plano |
-| BUG-25 | `channelId` en `content` en vez de `trigger` | ⬜ | `lib/notificaciones.js:56-58` — según doc v54, `channelId` va dentro del trigger. El canal "clases" (importance HIGH + sonido) nunca se aplica; Android usa el canal default |
-| BUG-26 | Subtítulo del calendario dice "hoy" pero cuenta el día seleccionado | ⬜ | `agenda.jsx:179` — usa `clasesDelDia` (día seleccionado) con el texto "programadas para hoy" |
-| BUG-27 | Estado `reagendada` se muestra como "Pendiente" en la agenda | ⬜ | `agenda.jsx:127-141` — `getEstadoInfo` no contempla `reagendada`; cae al badge default "Pendiente" |
-| ARQ-07 | Colores hardcodeados fuera de la paleta | ⬜ | Constitución: "sin colores hardcodeados". `login.jsx:150` y `registro.jsx:181` (`#ef4444` → `paleta.alert`), `perfil.jsx:270,403,598-599,727-728` (`#F59E0B` reagendada → paleta), `agenda.jsx:13` (`COLOR_HOY #E5E7EB`) y fallbacks `#d3bbff`/`#592da2` |
-| ARQ-08 | `console.error` en producción | ⬜ | `AlumnosContext.jsx:252` — constitución: sin console.log en producción. Eliminar o reemplazar por feedback al usuario |
+| BUG-20 | Cerrar sesión sin confirmación (regresión de AJ-07) | ✅ | `ajustes.jsx` — el botón ahora muestra Alert de confirmación (Cancelar / Cerrar sesión) antes de `signOut` |
+| BUG-21 | Token Calendar de corta vida en metadata (regresión de BUG-07) | ✅ | `getGoogleToken()` usa solo `session.provider_token`; `conectarCalendar` ya no guarda el token en metadata; eliminadas las limpiezas de `google_provider_token` |
+| BUG-22 | Eliminar alumno/taller deja notificaciones y eventos gCal huérfanos | ✅ | `AlumnosContext:limpiarClasesBorradas` — cancela notificaciones y borra eventos gCal de las clases eliminadas (las pagadas conservan su evento como histórico) |
+| BUG-23 | Reactivar clase cancelada no recrea el evento de Google Calendar | ✅ | `AlumnosContext:recrearEventoGCal` — `cambiarEstadoClase` y `editarClase` crean el evento cuando la clase reactivada no tiene `googleEventId`, y persisten el nuevo id |
+| BUG-24 | `shouldShowAlert` deprecado en expo-notifications SDK 54 | ✅ | `lib/notificaciones.js` — handler usa `shouldShowBanner` + `shouldShowList` según doc v54 |
+| BUG-25 | `channelId` en `content` en vez de `trigger` | ✅ | `lib/notificaciones.js` — `channelId: 'clases'` movido al trigger (doc v54); el canal HIGH + sonido ahora aplica en Android |
+| BUG-26 | Subtítulo del calendario dice "hoy" pero cuenta el día seleccionado | ✅ | `agenda.jsx` — nuevo `clasesDeHoy` (filtra por `isSameDay(hoy)`); singular/plural corregido |
+| BUG-27 | Estado `reagendada` se muestra como "Pendiente" en la agenda | ✅ | `agenda.jsx:getEstadoInfo` — caso `reagendada` con `paleta.warning` |
+| ARQ-07 | Colores hardcodeados fuera de la paleta | ✅ | `#ef4444` → `paleta.alert` (login/registro), `#F59E0B` → `paleta.warning` (perfil), `COLOR_HOY` → `paleta.onSurface` y fallbacks eliminados (agenda) |
+| ARQ-08 | `console.error` en producción | ✅ | Eliminado de `agregarTaller`; el error ya se propaga vía `{ error }` y Alert en `nuevo-taller.jsx` |
 | ARQ-09 | Paleta `secondary` oscuro difiere de la constitución | ✅ | Resuelto 2026-06-11: se actualizó la constitución a `#7C3AED` (decisión del usuario — `#4C1D95` sobre `#001230` da contraste ~1.6:1, ilegible como texto). El código ya estaba correcto |
 
 ---
@@ -135,7 +134,7 @@
 | AJ-04 | Estado de conexión Google Calendar | ✅ | ajustes.md |
 | AJ-05 | Botón desconectar Google Calendar | ✅ | ajustes.md |
 | AJ-06 | Sección suscripción (estado + botón renovar) | ⬜ | ajustes.md |
-| AJ-07 | Cerrar sesión con confirmación | ⬜ | ajustes.md — regresión: hoy llama `signOut` sin confirmar. Ver BUG-20 |
+| AJ-07 | Cerrar sesión con confirmación | ✅ | ajustes.md — regresión corregida vía BUG-20 (Alert de confirmación) |
 
 ---
 

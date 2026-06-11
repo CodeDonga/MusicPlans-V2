@@ -10,7 +10,6 @@ import { parseFecha, isSameDay } from '../../lib/fechas';
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DIAS_SEMANA = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
 const DIAS_LABEL = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
-const COLOR_HOY = '#E5E7EB';
 
 export default function Agenda() {
   const router = useRouter();
@@ -76,6 +75,11 @@ export default function Agenda() {
     return set;
   }, [todasLasClases, mes]);
 
+  const clasesDeHoy = todasLasClases.filter(c => {
+    const f = parseFecha(c.fecha);
+    return f && isSameDay(f, hoy);
+  });
+
   const clasesDelDia = useMemo(() => {
     return todasLasClases
       .filter(c => {
@@ -132,11 +136,12 @@ export default function Agenda() {
       const ahoraMin = ahora.getHours() * 60 + ahora.getMinutes();
       const inicioMin = h * 60 + m;
       if (ahoraMin >= inicioMin && ahoraMin < inicioMin + 60) {
-        return { label: 'En Curso', color: paleta.secondary || '#d3bbff', tipo: 'en_curso' };
+        return { label: 'En Curso', color: paleta.secondary, tipo: 'en_curso' };
       }
     }
     if (estado === 'realizada') return { label: 'Completada', color: paleta.primary, tipo: 'realizada' };
-    if (estado === 'cancelada') return { label: 'Cancelada', color: paleta.alert || '#F87171', tipo: 'cancelada' };
+    if (estado === 'cancelada') return { label: 'Cancelada', color: paleta.alert, tipo: 'cancelada' };
+    if (estado === 'reagendada') return { label: 'Reagendada', color: paleta.warning, tipo: 'reagendada' };
     return { label: 'Pendiente', color: paleta.onSurfaceVariant, tipo: 'pendiente' };
   }
 
@@ -176,7 +181,7 @@ export default function Agenda() {
         <View style={s.mesHeader}>
           <View>
             <Text style={s.mesTitulo}>{MESES[mes.getMonth()]} {mes.getFullYear()}</Text>
-            <Text style={s.mesSubtitulo}>{clasesDelDia.length} clase{clasesDelDia.length !== 1 ? 's' : ''} programadas para hoy</Text>
+            <Text style={s.mesSubtitulo}>{clasesDeHoy.length} clase{clasesDeHoy.length !== 1 ? 's' : ''} programada{clasesDeHoy.length !== 1 ? 's' : ''} para hoy</Text>
           </View>
           <View style={s.mesNav}>
             <TouchableOpacity style={s.navBtn} onPress={() => setMes(new Date(mes.getFullYear(), mes.getMonth() - 1, 1))} activeOpacity={0.7}>
@@ -219,7 +224,7 @@ export default function Agenda() {
                     <Text style={[
                       s.calDiaTexto,
                       !item.currentMonth && s.calDiaTextoOtroMes,
-                      esHoy && !esSeleccionado && { color: COLOR_HOY, fontFamily: 'Inter_700Bold' },
+                      esHoy && !esSeleccionado && { color: paleta.onSurface, fontFamily: 'Inter_700Bold' },
                       esSeleccionado && s.calDiaTextoSeleccionado,
                     ]}>
                       {item.date.getDate()}
@@ -267,7 +272,7 @@ export default function Agenda() {
                   >
                     <View style={[
                       s.timelineIcono,
-                      esEnCurso && { backgroundColor: paleta.secondary || '#592da2', borderColor: paleta.secondary || '#592da2' },
+                      esEnCurso && { backgroundColor: paleta.secondary, borderColor: paleta.secondary },
                       esRealizada && { backgroundColor: paleta.primary, borderColor: paleta.primary },
                     ]}>
                       <Text style={s.timelineEmoji}>{emoji}</Text>
@@ -325,9 +330,9 @@ export default function Agenda() {
                 <Text style={s.accionEmoji}>＋</Text>
                 <Text style={s.accionTexto}>Nueva Clase</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[s.accionBtn, { borderColor: (paleta.secondary || '#592da2') + '50' }]} onPress={() => router.navigate('/(tabs)/finanzas')} activeOpacity={0.8}>
+              <TouchableOpacity style={[s.accionBtn, { borderColor: paleta.secondary + '50' }]} onPress={() => router.navigate('/(tabs)/finanzas')} activeOpacity={0.8}>
                 <Text style={s.accionEmoji}>📊</Text>
-                <Text style={[s.accionTexto, { color: paleta.secondary || '#d3bbff' }]}>Reporte</Text>
+                <Text style={[s.accionTexto, { color: paleta.secondary }]}>Reporte</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -409,10 +414,10 @@ function makeStyles(p) {
       shadowRadius: 6,
       elevation: 3,
     },
-    // Hoy: sin relleno, texto #E5E7EB y borde más visible
+    // Hoy: sin relleno, texto onSurface y borde más visible
     calDiaHoy: {
       borderWidth: 1.5,
-      borderColor: COLOR_HOY + '80',
+      borderColor: p.onSurface + '80',
     },
     // Seleccionado: relleno primario
     calDiaSeleccionado: {

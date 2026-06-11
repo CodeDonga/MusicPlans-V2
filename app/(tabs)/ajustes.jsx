@@ -192,7 +192,18 @@ export default function Ajustes() {
         </View>
 
         {/* Cerrar sesión */}
-        <TouchableOpacity style={s.btnCerrarSesion} onPress={signOut} activeOpacity={0.8}>
+        <TouchableOpacity
+          style={s.btnCerrarSesion}
+          onPress={() => Alert.alert(
+            'Cerrar sesión',
+            '¿Seguro que quieres cerrar sesión?',
+            [
+              { text: 'Cancelar', style: 'cancel' },
+              { text: 'Cerrar sesión', style: 'destructive', onPress: signOut },
+            ]
+          )}
+          activeOpacity={0.8}
+        >
           <Text style={s.btnCerrarSesionTexto}>Cerrar Sesión</Text>
         </TouchableOpacity>
 

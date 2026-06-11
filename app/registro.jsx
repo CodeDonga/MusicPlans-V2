@@ -178,7 +178,7 @@ function makeStyles(p) {
       borderWidth: 1, borderColor: p.outlineVariant,
     },
 
-    errorTexto: { color: '#ef4444', fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 12, textAlign: 'center' },
+    errorTexto: { color: p.alert, fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 12, textAlign: 'center' },
 
     btnPrimario: {
       backgroundColor: p.primary, borderRadius: 14, height: 52,

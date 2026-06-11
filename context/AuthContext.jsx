@@ -104,7 +104,7 @@ export function AuthProvider({ children }) {
       token = sessionData?.session?.provider_token
     }
     if (!token) return false
-    await supabase.auth.updateUser({ data: { google_calendar_connected: true, google_provider_token: token } })
+    await supabase.auth.updateUser({ data: { google_calendar_connected: true } })
     setSession(prev => prev ? {
       ...prev,
       user: { ...prev.user, user_metadata: { ...prev.user.user_metadata, google_calendar_connected: true } }

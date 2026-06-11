@@ -147,7 +147,7 @@ function makeStyles(p) {
       borderWidth: 1, borderColor: p.outlineVariant,
     },
 
-    errorTexto: { color: '#ef4444', fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 12, textAlign: 'center' },
+    errorTexto: { color: p.alert, fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 12, textAlign: 'center' },
 
     linkOlvide: { alignSelf: 'flex-end', marginTop: 8, marginBottom: 4 },
     linkTexto: { color: p.primary, fontSize: 12, fontFamily: 'Inter_600SemiBold' },

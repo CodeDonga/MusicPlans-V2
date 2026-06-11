@@ -267,7 +267,7 @@ function PerfilContent({ id, tipo }) {
       pendiente:  { bg: paleta.primaryLight, text: paleta.primary },
       realizada:  { bg: paleta.successFaint, text: paleta.success },
       cancelada:  { bg: paleta.alertFaint,   text: paleta.alert },
-      reagendada: { bg: '#F59E0B22',         text: '#F59E0B' },
+      reagendada: { bg: paleta.warning + '22', text: paleta.warning },
     };
     return colores[estado] || colores.pendiente;
   }
@@ -402,7 +402,7 @@ function PerfilContent({ id, tipo }) {
                             setDropdownEstadoId(null);
                             if (e === 'reagendada') setTimeout(() => abrirEditarClase({ ...clase, estado: 'reagendada' }, true), 150);
                           }}>
-                            <Text style={[s.estadoOpcionTexto, (clase.estado || 'pendiente') === e && { color: paleta.primary, fontFamily: 'Inter_700Bold' }, e === 'reagendada' && { color: '#F59E0B' }]}>{ESTADO_LABEL[e]}</Text>
+                            <Text style={[s.estadoOpcionTexto, (clase.estado || 'pendiente') === e && { color: paleta.primary, fontFamily: 'Inter_700Bold' }, e === 'reagendada' && { color: paleta.warning }]}>{ESTADO_LABEL[e]}</Text>
                           </TouchableOpacity>
                         ))}
                       </View>
@@ -596,7 +596,7 @@ function PerfilContent({ id, tipo }) {
             <View style={s.estadosRow}>
               {ESTADOS.map(e => (
                 <TouchableOpacity key={e} style={[s.estadoBtn, e === 'reagendada' && s.estadoBtnReagendada, editEstado === e && (e === 'reagendada' ? s.estadoBtnReagendadaActivo : s.estadoBtnActivo)]} onPress={() => setEditEstado(e)}>
-                  <Text style={[s.estadoBtnTexto, editEstado === e && (e === 'reagendada' ? { color: '#F59E0B', fontFamily: 'Inter_700Bold' } : s.estadoBtnTextoActivo)]}>{ESTADO_LABEL[e]}</Text>
+                  <Text style={[s.estadoBtnTexto, editEstado === e && (e === 'reagendada' ? { color: paleta.warning, fontFamily: 'Inter_700Bold' } : s.estadoBtnTextoActivo)]}>{ESTADO_LABEL[e]}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -724,7 +724,7 @@ function makeStyles(p) {
     estadoBtnActivo: { backgroundColor: p.primaryLight, borderColor: p.primary },
     estadoBtnTexto: { color: p.onSurfaceVariant, fontSize: 11, fontFamily: 'Inter_600SemiBold' },
     estadoBtnTextoActivo: { color: p.primary },
-    estadoBtnReagendada: { borderColor: '#F59E0B60' },
-    estadoBtnReagendadaActivo: { backgroundColor: '#F59E0B20', borderColor: '#F59E0B' },
+    estadoBtnReagendada: { borderColor: p.warning + '60' },
+    estadoBtnReagendadaActivo: { backgroundColor: p.warning + '20', borderColor: p.warning },
   });
 }
