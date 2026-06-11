@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { AppState, Alert } from 'react-native';
+import { AppState } from 'react-native';
 import { supabase } from '../lib/supabase';
 import { useAuth } from './AuthContext';
 import { parseFecha } from '../lib/fechas';
@@ -9,7 +9,7 @@ import { crearEvento, editarEvento, eliminarEvento } from '../lib/googleCalendar
 const AlumnosContext = createContext(null);
 
 export function AlumnosProvider({ children }) {
-  const { session } = useAuth();
+  const { session, getCalendarAccessToken, clearProviderToken } = useAuth();
   const [alumnos, setAlumnos] = useState([]);
   const [talleres, setTalleres] = useState([]);
   const [clases, setClases] = useState({});
@@ -154,16 +154,14 @@ export function AlumnosProvider({ children }) {
   }
 
   async function getGoogleToken() {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.provider_token ?? null;
+    return await getCalendarAccessToken();
   }
 
   async function safeGCal(fn) {
     try { return await fn(); }
     catch (e) {
-      if (e.message === 'TOKEN_EXPIRADO') {
-        Alert.alert('Google Calendar desconectado', 'El acceso a Calendar expiró. Ve a Ajustes y vuelve a conectar Google Calendar.');
-      }
+      // GC-05: se invalida el caché y la próxima operación refresca sola
+      if (e.message === 'TOKEN_EXPIRADO') clearProviderToken();
       return null;
     }
   }
@@ -357,20 +355,14 @@ export function AlumnosProvider({ children }) {
       programarNotificacion(data.id, entidad?.nombre || '', clase.fecha, clase.hora);
       const token = await getGoogleToken();
       if (token) {
-        try {
-          const googleEventId = await crearEvento(token, claseDB, entidad?.nombre || '');
-          if (googleEventId) {
-            await supabase.from('clases').update({ google_event_id: googleEventId }).eq('id', data.id);
-            setClases(prev => ({
-              ...prev,
-              [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? { ...claseDB, googleEventId } : c),
-            }));
-            return;
-          }
-        } catch (e) {
-          if (e.message === 'TOKEN_EXPIRADO') {
-            Alert.alert('Google Calendar desconectado', 'El acceso a Calendar expiró. Ve a Ajustes y vuelve a conectar Google Calendar.');
-          }
+        const googleEventId = await safeGCal(() => crearEvento(token, claseDB, entidad?.nombre || ''));
+        if (googleEventId) {
+          await supabase.from('clases').update({ google_event_id: googleEventId }).eq('id', data.id);
+          setClases(prev => ({
+            ...prev,
+            [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? { ...claseDB, googleEventId } : c),
+          }));
+          return;
         }
       }
     }
@@ -523,7 +515,10 @@ export function AlumnosProvider({ children }) {
             actualizaciones.push({ entidadId, claseId: clase.id, googleEventId });
           }
         } catch (e) {
-          if (e.message === 'TOKEN_EXPIRADO') return actualizaciones.length;
+          if (e.message === 'TOKEN_EXPIRADO') {
+            clearProviderToken();
+            return actualizaciones.length;
+          }
         }
       }
     }

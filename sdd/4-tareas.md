@@ -2,7 +2,7 @@
 > Tareas atómicas y verificables. Cada tarea tiene un criterio de aceptación claro.  
 > Estado: ✅ Hecho | 🔄 En progreso | ⬜ Pendiente | 🚫 Bloqueado
 >
-> **Bugs conocidos:** sin pendientes — BUG-20..27, ARQ-07..09 corregidos el 2026-06-11.
+> **Bugs conocidos:** BUG-29 pendiente (prioridad alta — Calendar es fundamental en la app). BUG-20..28, ARQ-07..09 corregidos el 2026-06-11.
 
 ---
 
@@ -46,6 +46,8 @@
 | ARQ-07 | Colores hardcodeados fuera de la paleta | ✅ | `#ef4444` → `paleta.alert` (login/registro), `#F59E0B` → `paleta.warning` (perfil), `COLOR_HOY` → `paleta.onSurface` y fallbacks eliminados (agenda) |
 | ARQ-08 | `console.error` en producción | ✅ | Eliminado de `agregarTaller`; el error ya se propaga vía `{ error }` y Alert en `nuevo-taller.jsx` |
 | ARQ-09 | Paleta `secondary` oscuro difiere de la constitución | ✅ | Resuelto 2026-06-11: se actualizó la constitución a `#7C3AED` (decisión del usuario — `#4C1D95` sobre `#001230` da contraste ~1.6:1, ilegible como texto). El código ya estaba correcto |
+| BUG-29 | Borrar una clase no elimina su evento de Google Calendar | ⬜ | Reportado 2026-06-11 en dispositivo, con GC-05 ya operativo (crear clases sí sincroniza). **Prioridad alta**: Calendar es fundamental en la app. Pistas para investigar: (1) `eliminarEvento` en `lib/googleCalendar.js` traga errores no-401 en silencio — instrumentar el status real de la respuesta; (2) verificar que `googleEventId` no llegue null en el estado local al momento de borrar (clases sincronizadas vía `sincronizarClasesExistentes` o creadas en otra sesión); (3) revisar también el flujo de cancelar clase y `limpiarClasesBorradas`. Reproducir con Metro conectado para ver logs |
+| BUG-28 | `conectarCalendar` pierde el `provider_token` en el flujo de hash — Calendar nunca sincroniza | ✅ | `AuthContext.jsx:128-131` — `setSession({access_token, refresh_token})` no acepta `provider_token`, así que `getGoogleToken()` siempre lee null. La conexión "parece exitosa" (flag + Alert) pero crear/sincronizar eventos falla en silencio. Fix: guardar el token en un ref en memoria (nunca persistido, conforme BUG-07/BUG-21) y usarlo como fallback en `getGoogleToken()`; limpiarlo en signOut/desconectar/TOKEN_EXPIRADO |
 
 ---
 
@@ -158,7 +160,7 @@
 | GC-02 | Crear evento al agregar clase (incluye planificación y tarea) | ✅ | google-calendar.md |
 | GC-03 | Editar evento al editar clase (incluye planificación y tarea) | ✅ | google-calendar.md |
 | GC-04 | Eliminar evento al cancelar/eliminar clase | ✅ | google-calendar.md |
-| GC-05 | Manejo de token vencido (avisa al usuario con Alert, pendiente refresh automático) | 🚫 | google-calendar.md — bloqueada: el refresh requiere Edge Function con el client secret de Google (no es seguro client-side). Retomar cuando exista backend (infra de pagos) |
+| GC-05 | Refresh automático del token vía Edge Function | ✅ | google-calendar.md § Refresh automático — tabla `google_tokens` (RLS sin SELECT) + función `calendar-token` + cliente con caché en memoria. Desplegado y verificado en dispositivo el 2026-06-11: las clases sincronizan tras cerrar/reabrir la app sin reconectar |
 | GC-06 | Detección de conflictos de horario | ✅ | google-calendar.md — detección local en `perfil.jsx:buscarConflicto`: solapamiento de ventanas de 60 min entre clases no canceladas, Alert "¿Guardar igual?" al crear y al editar. freeBusy de Google queda como mejora futura |
 
 ---

@@ -16,9 +16,12 @@
 ### Conexión
 - [ ] El profesor puede conectar su Google Calendar desde la pantalla Ajustes.
 - [ ] La conexión solicita el scope `calendar.events` con `access_type: offline`.
-- [ ] **El token de Google nunca se persiste** (BUG-07/BUG-21): vive solo en `session.provider_token`. En `user_metadata` se guarda únicamente el flag `google_calendar_connected`.
+- [ ] **El access token de Google nunca se persiste en el cliente** (BUG-07/BUG-21): vive solo en un ref en memoria de `AuthContext` (BUG-28). En `user_metadata` se guarda únicamente el flag `google_calendar_connected`.
+- [ ] **Refresh automático (GC-05):** al conectar, el `provider_refresh_token` se guarda en la tabla `google_tokens` (server-side). Cuando el access token en memoria falta o está por vencer, el cliente invoca la Edge Function `calendar-token`, que canjea el refresh token con Google y devuelve un access token fresco. El usuario conecta Calendar **una sola vez**; no necesita reconectar tras 1 hora ni al reiniciar la app.
+- [ ] Al desconectar Calendar se elimina la fila de `google_tokens` y se limpia el ref en memoria.
 - [ ] Si no hay token disponible → las funciones de calendario fallan silenciosamente (sin error visible al usuario).
-- [ ] Si Google responde 401 (token vencido) → se lanza `TOKEN_EXPIRADO`, `safeGCal` avisa con Alert y pide reconectar desde Ajustes.
+- [ ] Si Google responde 401 (token vencido) → se lanza `TOKEN_EXPIRADO` y se invalida el caché en memoria; la siguiente operación obtiene un token fresco automáticamente (GC-05). Sin Alert: ya no se requiere acción del usuario.
+- [ ] Si el refresh falla porque el usuario revocó el acceso (`revoked`) o no hay refresh token guardado (`no_token`) → se limpia el flag `google_calendar_connected` y Ajustes vuelve a mostrar "conectar".
 
 ### Crear evento
 - [ ] Al crear una clase con estado != `cancelada` → intenta crear un evento en Google Calendar.
@@ -48,10 +51,44 @@ Definición: la detección es **local**, contra las clases de la app (no consult
 
 ---
 
+## Refresh automático del token (GC-05)
+
+### Modelo de datos
+
+Tabla `google_tokens` en Supabase:
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `user_id` | uuid PK | FK a `auth.users(id)` con `ON DELETE CASCADE` |
+| `refresh_token` | text | refresh token de Google (larga vida) |
+| `updated_at` | timestamptz | default `now()` |
+
+**RLS (clave de seguridad):** el cliente puede INSERT/UPDATE/DELETE su propia fila, pero **no tiene policy de SELECT** — el refresh token nunca es legible desde la app. Solo la Edge Function (service role) lo lee.
+
+### Edge Function `calendar-token`
+
+1. Valida el JWT del usuario (header `Authorization`).
+2. Lee `refresh_token` de `google_tokens` con service role. Sin fila → 404 `no_token`.
+3. POST a `https://oauth2.googleapis.com/token` con `client_id`, `client_secret` (secrets de la función), `refresh_token`, `grant_type=refresh_token`.
+4. OK → responde `{ access_token, expires_in }`.
+5. `invalid_grant` (usuario revocó acceso) → borra la fila y responde 410 `revoked`.
+6. Otro error de Google → 502.
+
+Secrets requeridos: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (los mismos del provider Google en Supabase Auth).
+
+### Flujo del cliente
+
+- `conectarCalendar` captura `provider_refresh_token` (hash o `exchangeCodeForSession`) y lo upsertea en `google_tokens`. El access token inicial queda en memoria con su expiración (~55 min).
+- `getCalendarAccessToken()` (AuthContext, async): si el token en memoria vence en >60s lo devuelve; si no, invoca `calendar-token` y cachea el nuevo. Si la función responde `revoked`/`no_token` → limpia el flag `google_calendar_connected` y devuelve null.
+- `getGoogleToken()` de `AlumnosContext` delega en `getCalendarAccessToken()`.
+- `TOKEN_EXPIRADO` (401 de la API de Calendar) invalida el caché en memoria para forzar refresh en la siguiente operación.
+
+---
+
 ## Restricciones técnicas
 
 - API directa de Google Calendar REST (no SDK).
-- El token se obtiene con `getCalendarToken()` de `AuthContext` o `getGoogleToken()` de `AlumnosContext`.
+- El token se obtiene con `getGoogleToken()` de `AlumnosContext`, que delega en `getCalendarAccessToken()` de `AuthContext` (caché en memoria + refresh vía Edge Function).
 - Fallos de Google Calendar nunca bloquean la operación principal (crear/editar/eliminar clase).
 - `google_event_id` en Supabase se limpia a `null` cuando el evento es eliminado de Calendar.
 
@@ -59,5 +96,5 @@ Definición: la detección es **local**, contra las clases de la app (no consult
 
 ## Estado actual
 
-- **Implementado:** `crearEvento`, `editarEvento`, `eliminarEvento`, aviso de token vencido (`TOKEN_EXPIRADO` + Alert), recreación de evento al reactivar, detección local de conflictos (GC-06).
-- **Pendiente (GC-05):** refresh automático del token. **Bloqueado**: requiere una Edge Function con el client secret de Google para canjear el `provider_refresh_token` — no puede hacerse de forma segura desde el cliente. Retomar cuando exista backend (la infra de pagos traerá Edge Functions).
+- **Implementado:** `crearEvento`, `editarEvento`, `eliminarEvento`, aviso de token vencido (`TOKEN_EXPIRADO` + Alert), recreación de evento al reactivar, detección local de conflictos (GC-06), refresh automático del token vía Edge Function `calendar-token` (GC-05).
+- **Despliegue GC-05:** requiere pasos manuales una vez — `supabase link`, `db push`, `secrets set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET`, `functions deploy calendar-token`.
