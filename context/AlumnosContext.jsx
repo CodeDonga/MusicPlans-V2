@@ -1,10 +1,15 @@
 import { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { AppState, Alert } from 'react-native';
 import { supabase } from '../lib/supabase';
+import { useAuth } from './AuthContext';
+import { parseFecha } from '../lib/fechas';
 import { programarNotificacion, cancelarNotificacion } from '../lib/notificaciones';
+import { crearEvento, editarEvento, eliminarEvento } from '../lib/googleCalendar';
 
 const AlumnosContext = createContext(null);
 
 export function AlumnosProvider({ children }) {
+  const { session } = useAuth();
   const [alumnos, setAlumnos] = useState([]);
   const [talleres, setTalleres] = useState([]);
   const [clases, setClases] = useState({});
@@ -12,35 +17,51 @@ export function AlumnosProvider({ children }) {
   const userIdRef = useRef(null);
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session && (event === 'INITIAL_SESSION' || event === 'SIGNED_IN')) {
-        userIdRef.current = session.user.id;
-        cargarDatos();
-      } else if (event === 'SIGNED_OUT') {
-        userIdRef.current = null;
-        setAlumnos([]);
-        setTalleres([]);
-        setClases({});
-        setPagosHistoricos([]);
-      }
+    const userId = session?.user?.id ?? null;
+    if (userId) {
+      userIdRef.current = userId;
+      cargarDatos();
+    } else {
+      userIdRef.current = null;
+      setAlumnos([]);
+      setTalleres([]);
+      setClases({});
+      setPagosHistoricos([]);
+    }
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active' && userIdRef.current) cargarDatos();
     });
-    return () => subscription.unsubscribe();
+    return () => sub.remove();
   }, []);
 
   async function cargarDatos() {
-    const [{ data: aData }, { data: tData }, { data: cData }] = await Promise.all([
-      supabase.from('alumnos').select('*').order('created_at'),
-      supabase.from('talleres').select('*').order('created_at'),
-      supabase.from('clases').select('*').order('created_at', { ascending: false }),
+    const userId = userIdRef.current;
+    if (!userId) return;
+    const [
+      { data: aData, error: aErr },
+      { data: tData, error: tErr },
+      { data: cData, error: cErr },
+    ] = await Promise.all([
+      supabase.from('alumnos').select('*').eq('user_id', userId).order('created_at'),
+      supabase.from('talleres').select('*').eq('user_id', userId).order('created_at'),
+      supabase.from('clases').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
     ]);
+
+    if (aErr || tErr || cErr) return;
 
     const todasIds = new Set([
       ...(aData || []).map(a => a.id),
       ...(tData || []).map(t => t.id),
     ]);
 
-    setAlumnos((aData || []).map(dbToAlumno));
-    setTalleres((tData || []).map(dbToTaller));
+    const alumnosMapped = (aData || []).map(dbToAlumno);
+    const talleresMapped = (tData || []).map(row => dbToTaller(row, alumnosMapped));
+
+    setAlumnos(alumnosMapped);
+    setTalleres(talleresMapped);
 
     const mapa = {};
     const historico = {};
@@ -95,7 +116,16 @@ export function AlumnosProvider({ children }) {
     };
   }
 
-  function dbToTaller(row) {
+  function extraerIds(arr) {
+    return (arr || []).map(p => typeof p === 'string' ? p : p?.id).filter(Boolean);
+  }
+
+  function dbToTaller(row, alumnosList = alumnos) {
+    const ids = extraerIds(row.participantes);
+    const participantesHidratados = ids.map(pid => {
+      const a = alumnosList.find(x => x.id === pid);
+      return { id: pid, nombre: a?.nombre || 'Alumno eliminado' };
+    });
     return {
       id: row.id,
       nombre: row.nombre,
@@ -105,7 +135,7 @@ export function AlumnosProvider({ children }) {
       diaSemana: row.dia_semana,
       hora: row.hora,
       tipo: row.tipo,
-      participantes: row.participantes || [],
+      participantes: participantesHidratados,
     };
   }
 
@@ -119,8 +149,26 @@ export function AlumnosProvider({ children }) {
       dia_semana: taller.diaSemana,
       hora: taller.hora,
       tipo: 'taller',
-      participantes: taller.participantes || [],
+      participantes: extraerIds(taller.participantes),
     };
+  }
+
+  async function getGoogleToken() {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.provider_token
+      ?? session?.user?.user_metadata?.google_provider_token
+      ?? null;
+  }
+
+  async function safeGCal(fn) {
+    try { return await fn(); }
+    catch (e) {
+      if (e.message === 'TOKEN_EXPIRADO') {
+        supabase.auth.updateUser({ data: { google_provider_token: null } });
+        Alert.alert('Google Calendar desconectado', 'El acceso a Calendar expiró. Ve a Ajustes y vuelve a conectar Google Calendar.');
+      }
+      return null;
+    }
   }
 
   function dbToClase(row) {
@@ -135,6 +183,7 @@ export function AlumnosProvider({ children }) {
       entidadNombre: row.entidad_nombre || '',
       valorUnitario: row.valor_unitario || 0,
       valorCustom: row.valor_custom ?? null,
+      googleEventId: row.google_event_id ?? null,
     };
   }
 
@@ -152,10 +201,10 @@ export function AlumnosProvider({ children }) {
 
     if (error || !data) {
       setAlumnos(prev => prev.filter(a => a.id !== tempId));
-      return;
+      return { error: error?.message || 'Error desconocido' };
     }
     setAlumnos(prev => prev.map(a => a.id === tempId ? dbToAlumno(data) : a));
-    return data.id;
+    return { id: data.id };
   }
 
   async function editarAlumno(alumnoActualizado) {
@@ -171,6 +220,11 @@ export function AlumnosProvider({ children }) {
     const entidad = alumnos.find(a => a.id === id);
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
 
+    await supabase.from('clases').delete().eq('entidad_id', id).eq('pagada', false);
+    await supabase.from('clases').delete().eq('entidad_id', id).is('pagada', null);
+    const { error } = await supabase.from('alumnos').delete().eq('id', id);
+    if (error) { cargarDatos(); return; }
+
     setAlumnos(prev => prev.filter(a => a.id !== id));
     setClases(prev => { const n = { ...prev }; delete n[id]; return n; });
 
@@ -180,10 +234,6 @@ export function AlumnosProvider({ children }) {
         { nombre: entidad?.nombre || 'Alumno eliminado', valorUnitario: entidad?.valorClase || 0, clases: clasesPagadas },
       ]);
     }
-
-    await supabase.from('clases').delete().eq('entidad_id', id).or('pagada.eq.false,pagada.is.null');
-    const { error } = await supabase.from('alumnos').delete().eq('id', id);
-    if (error) cargarDatos();
   }
 
   // --- TALLERES ---
@@ -221,6 +271,11 @@ export function AlumnosProvider({ children }) {
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
     const valorUnitario = (entidad?.valorPorAlumno || 0) * (entidad?.participantes?.length || 1);
 
+    await supabase.from('clases').delete().eq('entidad_id', id).eq('pagada', false);
+    await supabase.from('clases').delete().eq('entidad_id', id).is('pagada', null);
+    const { error } = await supabase.from('talleres').delete().eq('id', id);
+    if (error) { cargarDatos(); return; }
+
     setTalleres(prev => prev.filter(t => t.id !== id));
     setClases(prev => { const n = { ...prev }; delete n[id]; return n; });
 
@@ -230,10 +285,6 @@ export function AlumnosProvider({ children }) {
         { nombre: entidad?.nombre || 'Taller eliminado', valorUnitario, clases: clasesPagadas },
       ]);
     }
-
-    await supabase.from('clases').delete().eq('entidad_id', id).or('pagada.eq.false,pagada.is.null');
-    const { error } = await supabase.from('talleres').delete().eq('id', id);
-    if (error) cargarDatos();
   }
 
   // --- CLASES ---
@@ -276,13 +327,36 @@ export function AlumnosProvider({ children }) {
       }));
       return;
     }
-    setClases(prev => ({
-      ...prev,
-      [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? dbToClase(data) : c),
-    }));
+
+    const claseDB = dbToClase(data);
+
     if (clase.estado !== 'cancelada') {
       programarNotificacion(data.id, entidad?.nombre || '', clase.fecha, clase.hora);
+      const token = await getGoogleToken();
+      if (token) {
+        try {
+          const googleEventId = await crearEvento(token, claseDB, entidad?.nombre || '');
+          if (googleEventId) {
+            await supabase.from('clases').update({ google_event_id: googleEventId }).eq('id', data.id);
+            setClases(prev => ({
+              ...prev,
+              [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? { ...claseDB, googleEventId } : c),
+            }));
+            return;
+          }
+        } catch (e) {
+          if (e.message === 'TOKEN_EXPIRADO') {
+            supabase.auth.updateUser({ data: { google_provider_token: null } });
+            Alert.alert('Google Calendar desconectado', 'El acceso a Calendar expiró. Ve a Ajustes y vuelve a conectar Google Calendar.');
+          }
+        }
+      }
     }
+
+    setClases(prev => ({
+      ...prev,
+      [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? claseDB : c),
+    }));
   }
 
   async function editarClase(entidadId, claseActualizada) {
@@ -290,55 +364,153 @@ export function AlumnosProvider({ children }) {
       ...prev,
       [entidadId]: (prev[entidadId] || []).map(c => c.id === claseActualizada.id ? claseActualizada : c),
     }));
-    const { error } = await supabase
-      .from('clases')
-      .update({
-        fecha: claseActualizada.fecha,
-        hora: claseActualizada.hora,
-        planificacion: claseActualizada.planificacion,
-        tareas: claseActualizada.tareas,
-        estado: claseActualizada.estado,
-        valor_custom: claseActualizada.valorCustom ?? null,
-      })
-      .eq('id', claseActualizada.id);
-    if (error) cargarDatos();
-    if (claseActualizada.estado === 'cancelada') {
+
+    const cancelando = claseActualizada.estado === 'cancelada';
+    const dbUpdate = {
+      fecha: claseActualizada.fecha,
+      hora: claseActualizada.hora,
+      planificacion: claseActualizada.planificacion,
+      tareas: claseActualizada.tareas,
+      estado: claseActualizada.estado,
+      valor_custom: claseActualizada.valorCustom ?? null,
+    };
+    if (cancelando && claseActualizada.googleEventId) dbUpdate.google_event_id = null;
+
+    const { error } = await supabase.from('clases').update(dbUpdate).eq('id', claseActualizada.id);
+    if (error) { cargarDatos(); return; }
+
+    const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
+
+    if (cancelando) {
       cancelarNotificacion(claseActualizada.id);
+      if (claseActualizada.googleEventId) {
+        const token = await getGoogleToken();
+        if (token) await safeGCal(() => eliminarEvento(token, claseActualizada.googleEventId));
+        setClases(prev => ({
+          ...prev,
+          [entidadId]: (prev[entidadId] || []).map(c =>
+            c.id === claseActualizada.id ? { ...c, googleEventId: null } : c
+          ),
+        }));
+      }
     } else {
-      const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
       programarNotificacion(claseActualizada.id, entidad?.nombre || '', claseActualizada.fecha, claseActualizada.hora);
+      if (claseActualizada.googleEventId) {
+        const token = await getGoogleToken();
+        if (token) await safeGCal(() => editarEvento(token, claseActualizada.googleEventId, claseActualizada, entidad?.nombre || ''));
+      }
     }
   }
 
   async function eliminarClase(entidadId, claseId) {
+    const clase = (clases[entidadId] || []).find(c => c.id === claseId);
+    const { error } = await supabase.from('clases').delete().eq('id', claseId);
+    if (error) return;
+    cancelarNotificacion(claseId);
+    if (clase?.googleEventId) {
+      const token = await getGoogleToken();
+      if (token) await safeGCal(() => eliminarEvento(token, clase.googleEventId));
+    }
     setClases(prev => ({
       ...prev,
       [entidadId]: (prev[entidadId] || []).filter(c => c.id !== claseId),
     }));
-    cancelarNotificacion(claseId);
-    const { error } = await supabase.from('clases').delete().eq('id', claseId);
-    if (error) cargarDatos();
   }
 
   async function cambiarEstadoClase(entidadId, claseId, estado) {
+    const clase = (clases[entidadId] || []).find(c => c.id === claseId);
+    const estadoPrevio = clase?.estado;
     setClases(prev => ({
       ...prev,
       [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, estado } : c),
     }));
-    const { error } = await supabase.from('clases').update({ estado }).eq('id', claseId);
+    const dbUpdate = { estado };
+    if (estado === 'cancelada' && clase?.googleEventId) dbUpdate.google_event_id = null;
+    const { error } = await supabase.from('clases').update(dbUpdate).eq('id', claseId);
     if (error) cargarDatos();
     if (estado === 'cancelada') {
       cancelarNotificacion(claseId);
+      if (clase?.googleEventId) {
+        const token = await getGoogleToken();
+        if (token) await safeGCal(() => eliminarEvento(token, clase.googleEventId));
+        setClases(prev => ({
+          ...prev,
+          [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, googleEventId: null } : c),
+        }));
+      }
+    } else if (estadoPrevio === 'cancelada' && clase) {
+      const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
+      programarNotificacion(claseId, entidad?.nombre || '', clase.fecha, clase.hora);
     }
   }
 
   async function togglePagadaClase(entidadId, claseId, pagada) {
+    const clase = (clases[entidadId] || []).find(c => c.id === claseId);
+    const promoverARealizada = pagada && clase?.estado !== 'realizada';
+    const revertirAPendiente = !pagada && clase?.estado === 'realizada';
+    const nuevoEstado = promoverARealizada ? 'realizada' : revertirAPendiente ? 'pendiente' : null;
+
     setClases(prev => ({
       ...prev,
-      [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, pagada } : c),
+      [entidadId]: (prev[entidadId] || []).map(c =>
+        c.id === claseId ? { ...c, pagada, ...(nuevoEstado ? { estado: nuevoEstado } : {}) } : c
+      ),
     }));
-    const { error } = await supabase.from('clases').update({ pagada }).eq('id', claseId);
+    const dbUpdate = { pagada };
+    if (nuevoEstado) dbUpdate.estado = nuevoEstado;
+    const { error } = await supabase.from('clases').update(dbUpdate).eq('id', claseId);
     if (error) cargarDatos();
+
+    if (promoverARealizada) cancelarNotificacion(claseId);
+    if (revertirAPendiente && clase) {
+      const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
+      programarNotificacion(claseId, entidad?.nombre || '', clase.fecha, clase.hora);
+    }
+  }
+
+  async function sincronizarClasesExistentes() {
+    const token = await getGoogleToken();
+    if (!token) return 0;
+
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const actualizaciones = [];
+
+    for (const [entidadId, clasesEntidad] of Object.entries(clases)) {
+      const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
+      if (!entidad) continue;
+
+      for (const clase of clasesEntidad) {
+        if (clase.googleEventId) continue;
+        if (clase.estado === 'cancelada') continue;
+        const fechaClase = parseFecha(clase.fecha);
+        if (!fechaClase || fechaClase < hoy) continue;
+
+        try {
+          const googleEventId = await crearEvento(token, clase, entidad.nombre);
+          if (googleEventId) {
+            await supabase.from('clases').update({ google_event_id: googleEventId }).eq('id', clase.id);
+            actualizaciones.push({ entidadId, claseId: clase.id, googleEventId });
+          }
+        } catch (e) {
+          if (e.message === 'TOKEN_EXPIRADO') return actualizaciones.length;
+        }
+      }
+    }
+
+    if (actualizaciones.length > 0) {
+      setClases(prev => {
+        const next = { ...prev };
+        for (const { entidadId, claseId, googleEventId } of actualizaciones) {
+          next[entidadId] = (next[entidadId] || []).map(c =>
+            c.id === claseId ? { ...c, googleEventId } : c
+          );
+        }
+        return next;
+      });
+    }
+
+    return actualizaciones.length;
   }
 
   return (
@@ -347,6 +519,7 @@ export function AlumnosProvider({ children }) {
       agregarAlumno, editarAlumno, eliminarAlumno,
       agregarTaller, editarTaller, eliminarTaller,
       agregarClase, editarClase, eliminarClase, cambiarEstadoClase, togglePagadaClase,
+      sincronizarClasesExistentes,
     }}>
       {children}
     </AlumnosContext.Provider>

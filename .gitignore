@@ -40,3 +40,12 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# credenciales OAuth (client secret de Google)
+cliente auth/
+
+# logs locales
+build_log.txt
+
+# config local de Claude Code
+.claude/settings.local.json

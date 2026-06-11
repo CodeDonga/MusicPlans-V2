@@ -1,9 +1,11 @@
-import { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar } from 'react-native';
+import { useState, useRef, useMemo } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, StatusBar, PanResponder } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import { useAlumnos } from '../../context/AlumnosContext';
 import { useTema } from '../../context/TemaContext';
+import { parseFecha } from '../../lib/fechas';
 
 export default function Finanzas() {
   const router = useRouter();
@@ -11,23 +13,34 @@ export default function Finanzas() {
   const { tema, paleta } = useTema();
   const [mes, setMes] = useState(new Date());
 
-  const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
-  if (!fontsLoaded) return null;
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_, { dx, dy }) => Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 5,
+      onMoveShouldSetPanResponderCapture: () => false,
+      onPanResponderRelease: (_, { dx, dy }) => {
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
+          if (dx > 0) setMes(prev => new Date(prev.getFullYear(), prev.getMonth() - 1));
+          else setMes(prev => new Date(prev.getFullYear(), prev.getMonth() + 1));
+        }
+      },
+    })
+  ).current;
 
-  const s = makeStyles(paleta);
+  const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
+  const s = useMemo(() => makeStyles(paleta), [paleta]);
+
+  if (!fontsLoaded) return null;
 
   const mesLabel = mes.toLocaleDateString('es-CL', { month: 'long', year: 'numeric' });
   const irMesAnterior = () => setMes(prev => new Date(prev.getFullYear(), prev.getMonth() - 1));
   const irMesSiguiente = () => setMes(prev => new Date(prev.getFullYear(), prev.getMonth() + 1));
 
   function esDelMes(clase) {
-    if (!clase.fecha) return false;
-    const partes = clase.fecha.split(/[\/\-]/);
-    if (partes.length !== 3) return false;
-    // Soporta DD/MM/YYYY y YYYY-MM-DD
-    const [a, b, c] = partes.map(Number);
-    const [dia, mesClase, anio] = a > 31 ? [c, b, a] : [a, b, c];
-    return mesClase === mes.getMonth() + 1 && anio === mes.getFullYear();
+    const fecha = parseFecha(clase.fecha);
+    if (!fecha) return false;
+    return fecha.getMonth() === mes.getMonth() && fecha.getFullYear() === mes.getFullYear();
   }
 
   function formatCLP(n) {
@@ -50,15 +63,15 @@ export default function Finanzas() {
   }).filter(r => r.realizadas > 0 || r.pendientes > 0);
 
   const historico = pagosHistoricos.map(h => {
-    const clasesDelMes = h.clases.filter(esDelMes);
-    const pagadas = clasesDelMes.filter(c => c.pagada).length;
+    const clasesPagadas = h.clases.filter(esDelMes).filter(c => c.pagada);
+    const pagadas = clasesPagadas.length;
     const ingresoCobrado = pagadas * h.valorUnitario;
-    return { nombre: h.nombre, valorUnitario: h.valorUnitario, pagadas, ingresoCobrado, eliminado: true };
+    return { nombre: h.nombre, valorUnitario: h.valorUnitario, pagadas, ingresoCobrado, eliminado: true, clases: clasesPagadas };
   }).filter(h => h.pagadas > 0);
 
-  const totalGenerado = resumen.reduce((acc, r) => acc + r.ingresoGenerado, 0);
-  const totalCobrado = resumen.reduce((acc, r) => acc + r.ingresoCobrado, 0)
-    + historico.reduce((acc, h) => acc + h.ingresoCobrado, 0);
+  const ingresoHistorico = historico.reduce((acc, h) => acc + h.ingresoCobrado, 0);
+  const totalGenerado = resumen.reduce((acc, r) => acc + r.ingresoGenerado, 0) + ingresoHistorico;
+  const totalCobrado = resumen.reduce((acc, r) => acc + r.ingresoCobrado, 0) + ingresoHistorico;
   const totalPorCobrar = resumen.reduce((acc, r) => acc + r.ingresoPorCobrar, 0);
 
   return (
@@ -72,59 +85,61 @@ export default function Finanzas() {
         </View>
       </View>
 
-      <FlatList
-        data={resumen}
-        keyExtractor={item => item.entidad.id}
-        contentContainerStyle={s.lista}
-        ListHeaderComponent={
-          <View>
-            <View style={s.seccionTituloContainer}>
-              <Text style={s.seccionLabel}>Resumen mensual</Text>
-              <Text style={s.seccionTitulo}>Finanzas</Text>
-            </View>
+      {/* Zona swipeable: título + selector de mes + resumen — fuera del FlatList para evitar conflicto de responder */}
+      <View style={s.swipeZone} {...panResponder.panHandlers}>
+        <View style={s.seccionTituloContainer}>
+          <Text style={s.seccionLabel}>Resumen mensual</Text>
+          <Text style={s.seccionTitulo}>Finanzas</Text>
+        </View>
 
-            <View style={s.mesSelector}>
-              <TouchableOpacity onPress={irMesAnterior} style={s.mesBtnArrow}>
-                <Text style={s.mesBtnArrowTexto}>‹</Text>
-              </TouchableOpacity>
-              <Text style={s.mesLabel}>{mesLabel}</Text>
-              <TouchableOpacity onPress={irMesSiguiente} style={s.mesBtnArrow}>
-                <Text style={s.mesBtnArrowTexto}>›</Text>
-              </TouchableOpacity>
-            </View>
+        <View style={s.mesSelector}>
+          <TouchableOpacity onPress={irMesAnterior} style={s.mesBtnArrow} hitSlop={{ top: 10, bottom: 10 }}>
+            <Text style={s.mesBtnArrowTexto}>‹</Text>
+          </TouchableOpacity>
+          <Text style={s.mesLabel}>{mesLabel}</Text>
+          <TouchableOpacity onPress={irMesSiguiente} style={s.mesBtnArrow} hitSlop={{ top: 10, bottom: 10 }}>
+            <Text style={s.mesBtnArrowTexto}>›</Text>
+          </TouchableOpacity>
+        </View>
 
-            <View style={s.resumenCard}>
-              <Text style={s.resumenLabel}>Total generado</Text>
-              <Text style={s.resumenTotal}>{formatCLP(totalGenerado)}</Text>
-              {totalCobrado > 0 ? (
-                <View style={s.resumenRow}>
-                  <View style={s.resumenItem}>
-                    <Text style={s.resumenItemLabel}>Cobrado</Text>
-                    <Text style={[s.resumenItemValor, { color: paleta.success }]}>{formatCLP(totalCobrado)}</Text>
-                  </View>
-                  {totalPorCobrar > 0 && (
-                    <>
-                      <View style={s.resumenDivisor} />
-                      <View style={s.resumenItem}>
-                        <Text style={s.resumenItemLabel}>Por cobrar</Text>
-                        <Text style={[s.resumenItemValor, { color: paleta.alert }]}>{formatCLP(totalPorCobrar)}</Text>
-                      </View>
-                    </>
-                  )}
-                </View>
-              ) : totalPorCobrar > 0 ? (
-                <View style={s.resumenRow}>
+        <View style={s.resumenCard}>
+          <Text style={s.resumenLabel}>Total generado</Text>
+          <Text style={s.resumenTotal}>{formatCLP(totalGenerado)}</Text>
+          {totalCobrado > 0 ? (
+            <View style={s.resumenRow}>
+              <View style={s.resumenItem}>
+                <Text style={s.resumenItemLabel}>Cobrado</Text>
+                <Text style={[s.resumenItemValor, { color: paleta.success }]}>{formatCLP(totalCobrado)}</Text>
+              </View>
+              {totalPorCobrar > 0 && (
+                <>
+                  <View style={s.resumenDivisor} />
                   <View style={s.resumenItem}>
                     <Text style={s.resumenItemLabel}>Por cobrar</Text>
                     <Text style={[s.resumenItemValor, { color: paleta.alert }]}>{formatCLP(totalPorCobrar)}</Text>
                   </View>
-                </View>
-              ) : null}
+                </>
+              )}
             </View>
+          ) : totalPorCobrar > 0 ? (
+            <View style={s.resumenRow}>
+              <View style={s.resumenItem}>
+                <Text style={s.resumenItemLabel}>Por cobrar</Text>
+                <Text style={[s.resumenItemValor, { color: paleta.alert }]}>{formatCLP(totalPorCobrar)}</Text>
+              </View>
+            </View>
+          ) : null}
+        </View>
+      </View>
 
-            {resumen.length > 0 && <Text style={s.seccionLabel2}>Detalle por alumno / taller</Text>}
-          </View>
-        }
+      {/* Lista scrollable: sólo los items */}
+      <FlatList
+        data={resumen}
+        keyExtractor={item => item.entidad.id}
+        contentContainerStyle={s.lista}
+        ListHeaderComponent={resumen.length > 0 ? (
+          <Text style={s.seccionLabel2}>Detalle por alumno / taller</Text>
+        ) : null}
         ListEmptyComponent={
           <View style={s.emptyContainer}>
             <Text style={s.emptyIcon}>💰</Text>
@@ -151,6 +166,15 @@ export default function Finanzas() {
                     <Text style={s.statLabel}>Pagadas</Text>
                   </View>
                 </View>
+                {h.clases.length > 0 && (
+                  <View style={s.historicoDetalle}>
+                    {h.clases.map(c => (
+                      <Text key={c.id} style={s.historicoClaseTexto}>
+                        {c.fecha} · {c.hora}hs
+                      </Text>
+                    ))}
+                  </View>
+                )}
               </View>
             ))}
           </View>
@@ -207,10 +231,11 @@ function makeStyles(p) {
     headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     headerIcon: { fontSize: 22 },
     headerLogo: { color: p.primary, fontSize: 22, fontFamily: 'Inter_800ExtraBold', letterSpacing: -0.5 },
-    seccionTituloContainer: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 8 },
+    swipeZone: { paddingHorizontal: 16 },
+    seccionTituloContainer: { paddingTop: 20, paddingBottom: 8 },
     seccionLabel: { color: p.primary, fontSize: 10, fontFamily: 'Inter_700Bold', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 4 },
     seccionTitulo: { color: p.onSurface, fontSize: 36, fontFamily: 'Inter_800ExtraBold', letterSpacing: -1 },
-    lista: { paddingHorizontal: 16, paddingBottom: 40 },
+    lista: { paddingHorizontal: 16, paddingBottom: 120 },
 
     mesSelector: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, backgroundColor: p.bgCard, borderRadius: 14, borderWidth: 1, borderColor: p.outlineVariant, paddingVertical: 4 },
     mesBtnArrow: { paddingHorizontal: 20, paddingVertical: 10 },
@@ -247,6 +272,9 @@ function makeStyles(p) {
     statItem: { flex: 1, alignItems: 'center' },
     statValor: { color: p.onSurface, fontSize: 16, fontFamily: 'Inter_700Bold', marginBottom: 2 },
     statLabel: { color: p.onSurfaceVariant, fontSize: 10, fontFamily: 'Inter_500Medium' },
+
+    historicoDetalle: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: p.outlineVariant, gap: 4 },
+    historicoClaseTexto: { color: p.onSurfaceVariant, fontSize: 12, fontFamily: 'Inter_400Regular' },
 
     emptyContainer: { alignItems: 'center', marginTop: 40 },
     emptyIcon: { fontSize: 40, marginBottom: 12 },

@@ -1,22 +1,47 @@
-import { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, TextInput, Alert, ScrollView, ActivityIndicator } from 'react-native';
+import { useState, useMemo } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, TextInput, Alert, ScrollView, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import { useTema } from '../../context/TemaContext';
 import { useAuth } from '../../context/AuthContext';
+import { useAlumnos } from '../../context/AlumnosContext';
 
 export default function Ajustes() {
   const { tema, paleta, toggleTema } = useTema();
-  const { signOut, session, updatePerfil } = useAuth();
+  const { signOut, session, updatePerfil, conectarCalendar, desconectarCalendar, getCalendarToken } = useAuth();
+  const { sincronizarClasesExistentes } = useAlumnos();
 
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
 
   const [nombre, setNombre] = useState(session?.user?.user_metadata?.nombre || '');
   const [guardando, setGuardando] = useState(false);
+  const [conectandoCalendar, setConectandoCalendar] = useState(false);
   const email = session?.user?.email || '';
+  const calendarConectado = !!getCalendarToken();
+
+  const s = useMemo(() => makeStyles(paleta), [paleta]);
 
   if (!fontsLoaded) return null;
 
-  const s = makeStyles(paleta);
+  async function handleConectarCalendar() {
+    setConectandoCalendar(true);
+    try {
+      const ok = await conectarCalendar();
+      if (ok) {
+        const sincronizadas = await sincronizarClasesExistentes();
+        const msg = sincronizadas > 0
+          ? `Tus clases se sincronizarán automáticamente.\n${sincronizadas} clase${sincronizadas > 1 ? 's' : ''} existente${sincronizadas > 1 ? 's' : ''} agregada${sincronizadas > 1 ? 's' : ''} al calendario.`
+          : 'Tus clases se sincronizarán automáticamente.';
+        Alert.alert('Google Calendar conectado', msg);
+      } else {
+        Alert.alert('No conectado', 'Intenta de nuevo.');
+      }
+    } catch (e) {
+      Alert.alert('Error', e.message || 'No se pudo conectar.');
+    } finally {
+      setConectandoCalendar(false);
+    }
+  }
 
   async function handleGuardarPerfil() {
     if (!nombre.trim()) {
@@ -79,7 +104,7 @@ export default function Ajustes() {
           <View style={s.divisor} />
           <TouchableOpacity style={s.btnGuardar} onPress={handleGuardarPerfil} activeOpacity={0.8} disabled={guardando}>
             {guardando
-              ? <ActivityIndicator color={paleta.onPrimary} size="small" />
+              ? <ActivityIndicator color="#ffffff" size="small" />
               : <Text style={s.btnGuardarTexto}>Guardar cambios</Text>
             }
           </TouchableOpacity>
@@ -107,6 +132,53 @@ export default function Ajustes() {
             <Text style={[s.opcionTexto, tema === 'claro' && s.opcionTextoActivo]}>Modo Claro</Text>
             {tema === 'claro' && <Text style={s.opcionCheck}>✓</Text>}
           </TouchableOpacity>
+        </View>
+
+        {/* Integraciones */}
+        <Text style={s.grupoLabel}>Integraciones</Text>
+        <View style={s.card}>
+          <TouchableOpacity
+            style={s.opcion}
+            onPress={calendarConectado ? null : handleConectarCalendar}
+            activeOpacity={calendarConectado ? 1 : 0.75}
+            disabled={conectandoCalendar}
+          >
+            <Text style={s.opcionIcon}>📅</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.opcionTexto, calendarConectado && { color: paleta.success }]}>
+                {calendarConectado ? 'Google Calendar conectado' : 'Conectar Google Calendar'}
+              </Text>
+              <Text style={{ color: paleta.onSurfaceVariant, fontSize: 11, fontFamily: 'Inter_400Regular', marginTop: 1 }}>
+                {calendarConectado ? 'Las clases se sincronizan automáticamente' : 'Sincroniza tus clases con Google Calendar'}
+              </Text>
+            </View>
+            {conectandoCalendar
+              ? <ActivityIndicator size="small" color={paleta.primary} />
+              : calendarConectado
+                ? <Text style={{ color: paleta.success, fontSize: 16 }}>✓</Text>
+                : <Text style={s.opcionFlecha}>›</Text>
+            }
+          </TouchableOpacity>
+          {calendarConectado && (
+            <>
+              <View style={s.divisor} />
+              <TouchableOpacity
+                style={s.opcion}
+                onPress={() => Alert.alert(
+                  'Desconectar Calendar',
+                  '¿Seguro? Las clases nuevas no se sincronizarán hasta que vuelvas a conectar.',
+                  [
+                    { text: 'Cancelar', style: 'cancel' },
+                    { text: 'Desconectar', style: 'destructive', onPress: desconectarCalendar },
+                  ]
+                )}
+                activeOpacity={0.75}
+              >
+                <Text style={s.opcionIcon}>🔗</Text>
+                <Text style={[s.opcionTexto, { color: paleta.alert }]}>Desconectar Google Calendar</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         {/* Cuenta */}
@@ -150,7 +222,7 @@ function makeStyles(p) {
     input: { color: p.onSurface, fontSize: 15, fontFamily: 'Inter_400Regular', paddingVertical: 0 },
     emailTexto: { color: p.onSurface, fontSize: 15, fontFamily: 'Inter_400Regular' },
     btnGuardar: { margin: 12, backgroundColor: p.primary, borderRadius: 12, height: 46, alignItems: 'center', justifyContent: 'center' },
-    btnGuardarTexto: { color: p.onPrimary, fontSize: 15, fontFamily: 'Inter_700Bold' },
+    btnGuardarTexto: { color: '#ffffff', fontSize: 15, fontFamily: 'Inter_700Bold' },
     opcion: { flexDirection: 'row', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 16, gap: 12 },
     opcionActiva: { backgroundColor: p.primaryLight },
     opcionIcon: { fontSize: 20, width: 28, textAlign: 'center' },

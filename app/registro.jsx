@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
+import { useState, useMemo } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, StatusBar, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFonts, Inter_400Regular, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import { useTema } from '../context/TemaContext';
@@ -18,13 +19,17 @@ export default function Registro() {
   const [exito, setExito] = useState(false);
 
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
-  if (!fontsLoaded) return null;
+  const s = useMemo(() => makeStyles(paleta), [paleta]);
 
-  const s = makeStyles(paleta);
+  if (!fontsLoaded) return null;
 
   async function handleRegistro() {
     if (!nombre || !email || !password || !confirmar) {
       setError('Completa todos los campos.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError('Ingresa un correo válido.');
       return;
     }
     if (password !== confirmar) {

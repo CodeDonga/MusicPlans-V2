@@ -1,6 +1,9 @@
 # MusicPlans — Especificación de Software (SDD)
 ### Versión 2.0 — 2026-05-28
 
+> ⚠️ Este archivo es el documento original de referencia.  
+> La fuente de verdad activa y mantenida está en **[`sdd/`](sdd/README.md)**.
+
 ---
 
 ## 1. Descripción General
@@ -333,7 +336,15 @@ Al presionar → navega al perfil del alumno.
 
 ---
 
-## 9. Por Definir
+## 9. Bugs Conocidos
+
+| ID | Módulo | Descripción | Estado |
+|----|--------|-------------|--------|
+| BUG-01 | Google Calendar | `provider_token` de Google no persiste entre sesiones — Supabase solo lo expone en la respuesta OAuth inicial, no en sesiones restauradas. `getGoogleToken()` siempre retorna `null` tras el primer arranque, bloqueando toda sincronización. **Fix:** almacenar el token en `user_metadata` al conectar. | Corregido |
+
+---
+
+## 10. Por Definir
 
 - Precio de suscripción mensual
 - Duración período de prueba

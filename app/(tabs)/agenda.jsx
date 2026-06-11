@@ -1,44 +1,59 @@
-import { useState, useMemo } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar } from 'react-native';
+import { useState, useMemo, useRef, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, StatusBar, PanResponder, Linking, Image } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import { useAlumnos } from '../../context/AlumnosContext';
 import { useTema } from '../../context/TemaContext';
+import { parseFecha, isSameDay } from '../../lib/fechas';
 
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DIAS_SEMANA = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
 const DIAS_LABEL = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
 const COLOR_HOY = '#E5E7EB';
 
-// Parsea DD/MM/YYYY o D/M/YYYY o con guiones
-function parseFecha(str) {
-  if (!str || typeof str !== 'string') return null;
-  const parts = str.split(/[\/\-]/);
-  if (parts.length !== 3) return null;
-  const [a, b, c] = parts.map(Number);
-  if (isNaN(a) || isNaN(b) || isNaN(c)) return null;
-  // Si el tercer valor es el año (4 dígitos): D/M/YYYY
-  if (c > 999) return new Date(c, b - 1, a);
-  // Si el primero es el año: YYYY/MM/DD (ISO-like)
-  if (a > 999) return new Date(a, b - 1, c);
-  return null;
-}
-
-function isSameDay(a, b) {
-  if (!a || !b) return false;
-  return a.getDate() === b.getDate() &&
-    a.getMonth() === b.getMonth() &&
-    a.getFullYear() === b.getFullYear();
-}
-
 export default function Agenda() {
   const router = useRouter();
   const { alumnos, talleres, clases } = useAlumnos();
   const { tema, paleta } = useTema();
 
-  const hoy = useMemo(() => new Date(), []);
+  const hoy = new Date();
+  const [ahora, setAhora] = useState(() => new Date());
+  const timeoutRef = useRef(null);
   const [mes, setMes] = useState(() => new Date(hoy.getFullYear(), hoy.getMonth(), 1));
   const [diaSeleccionado, setDiaSeleccionado] = useState(() => new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate()));
+
+  useEffect(() => {
+    function programarSiguiente() {
+      const now = new Date();
+      const hoyBase = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      let proximoMs = null;
+
+      [...alumnos, ...talleres].forEach(entidad => {
+        (clases[entidad.id] || []).forEach(clase => {
+          if (clase.estado !== 'pendiente') return;
+          const f = parseFecha(clase.fecha);
+          if (!f || !isSameDay(f, hoyBase)) return;
+          const [h, m] = (clase.hora || '00:00').split(':').map(Number);
+          const inicioMs = hoyBase.getTime() + (h * 60 + m) * 60000;
+          const finMs = inicioMs + 3600000;
+          [inicioMs, finMs].forEach(t => {
+            if (t > now.getTime() && (proximoMs === null || t < proximoMs)) proximoMs = t;
+          });
+        });
+      });
+
+      if (proximoMs !== null) {
+        timeoutRef.current = setTimeout(() => {
+          setAhora(new Date());
+          programarSiguiente();
+        }, proximoMs - now.getTime());
+      }
+    }
+
+    programarSiguiente();
+    return () => clearTimeout(timeoutRef.current);
+  }, [alumnos, talleres, clases]);
 
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
 
@@ -113,16 +128,35 @@ export default function Agenda() {
     const f = parseFecha(clase.fecha);
     const esHoy = f && isSameDay(f, hoy);
     if (esHoy && estado === 'pendiente') {
-      const [h] = (clase.hora || '00:00').split(':').map(Number);
-      if (hoy.getHours() === h) return { label: 'En Curso', color: paleta.secondary || '#d3bbff', tipo: 'en_curso' };
+      const [h, m] = (clase.hora || '00:00').split(':').map(Number);
+      const ahoraMin = ahora.getHours() * 60 + ahora.getMinutes();
+      const inicioMin = h * 60 + m;
+      if (ahoraMin >= inicioMin && ahoraMin < inicioMin + 60) {
+        return { label: 'En Curso', color: paleta.secondary || '#d3bbff', tipo: 'en_curso' };
+      }
     }
     if (estado === 'realizada') return { label: 'Completada', color: paleta.primary, tipo: 'realizada' };
     if (estado === 'cancelada') return { label: 'Cancelada', color: paleta.alert || '#F87171', tipo: 'cancelada' };
     return { label: 'Pendiente', color: paleta.onSurfaceVariant, tipo: 'pendiente' };
   }
 
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_, { dx, dy }) => Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 5,
+      onMoveShouldSetPanResponderCapture: () => false,
+      onPanResponderRelease: (_, { dx, dy }) => {
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 50) {
+          if (dx > 0) setMes(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
+          else setMes(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
+        }
+      },
+    })
+  ).current;
+
+  const s = useMemo(() => makeStyles(paleta), [paleta]);
   if (!fontsLoaded) return null;
-  const s = makeStyles(paleta);
 
   const diaLabel = `${DIAS_LABEL[diaSeleccionado.getDay()]} ${diaSeleccionado.getDate()}`;
 
@@ -137,70 +171,68 @@ export default function Agenda() {
         </View>
       </View>
 
-      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-
-        {/* ── Calendario ── */}
-        <View style={s.seccion}>
-          <View style={s.mesHeader}>
-            <View>
-              <Text style={s.mesTitulo}>{MESES[mes.getMonth()]} {mes.getFullYear()}</Text>
-              <Text style={s.mesSubtitulo}>{clasesDelDia.length} clase{clasesDelDia.length !== 1 ? 's' : ''} programadas para hoy</Text>
-            </View>
-            <View style={s.mesNav}>
-              <TouchableOpacity style={s.navBtn} onPress={() => setMes(new Date(mes.getFullYear(), mes.getMonth() - 1, 1))} activeOpacity={0.7}>
-                <Text style={s.navBtnTexto}>‹</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.navBtn} onPress={() => setMes(new Date(mes.getFullYear(), mes.getMonth() + 1, 1))} activeOpacity={0.7}>
-                <Text style={s.navBtnTexto}>›</Text>
-              </TouchableOpacity>
-            </View>
+      {/* Calendario — fuera del ScrollView para capturar swipe horizontal sin conflicto */}
+      <View style={s.calSeccion} {...panResponder.panHandlers}>
+        <View style={s.mesHeader}>
+          <View>
+            <Text style={s.mesTitulo}>{MESES[mes.getMonth()]} {mes.getFullYear()}</Text>
+            <Text style={s.mesSubtitulo}>{clasesDelDia.length} clase{clasesDelDia.length !== 1 ? 's' : ''} programadas para hoy</Text>
           </View>
-
-          <View style={s.calPanel}>
-            {/* Cabecera días semana */}
-            <View style={s.calHeaderRow}>
-              {DIAS_SEMANA.map(d => (
-                <View key={d} style={s.calCell}>
-                  <Text style={s.calDiaLabel}>{d}</Text>
-                </View>
-              ))}
-            </View>
-
-            {/* Grid 6 filas × 7 columnas */}
-            <View style={s.calGrid}>
-              {calendarDays.map((item, idx) => {
-                const esHoy = isSameDay(item.date, hoy);
-                const esSeleccionado = isSameDay(item.date, diaSeleccionado);
-                const tieneClases = item.currentMonth && diasConClases.has(item.date.getDate());
-
-                return (
-                  <TouchableOpacity
-                    key={idx}
-                    style={s.calCell}
-                    onPress={() => item.currentMonth && setDiaSeleccionado(new Date(item.date.getFullYear(), item.date.getMonth(), item.date.getDate()))}
-                    activeOpacity={item.currentMonth ? 0.7 : 1}
-                  >
-                    <View style={[
-                      s.calDia,
-                      tieneClases && !esSeleccionado && s.calDiaConClases,
-                      esHoy && !esSeleccionado && s.calDiaHoy,
-                      esSeleccionado && s.calDiaSeleccionado,
-                    ]}>
-                      <Text style={[
-                        s.calDiaTexto,
-                        !item.currentMonth && s.calDiaTextoOtroMes,
-                        esHoy && !esSeleccionado && { color: COLOR_HOY, fontFamily: 'Inter_700Bold' },
-                        esSeleccionado && s.calDiaTextoSeleccionado,
-                      ]}>
-                        {item.date.getDate()}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+          <View style={s.mesNav}>
+            <TouchableOpacity style={s.navBtn} onPress={() => setMes(new Date(mes.getFullYear(), mes.getMonth() - 1, 1))} activeOpacity={0.7}>
+              <Text style={s.navBtnTexto}>‹</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.navBtn} onPress={() => setMes(new Date(mes.getFullYear(), mes.getMonth() + 1, 1))} activeOpacity={0.7}>
+              <Text style={s.navBtnTexto}>›</Text>
+            </TouchableOpacity>
           </View>
         </View>
+
+        <View style={s.calPanel}>
+          <View style={s.calHeaderRow}>
+            {DIAS_SEMANA.map(d => (
+              <View key={d} style={s.calCell}>
+                <Text style={s.calDiaLabel}>{d}</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={s.calGrid}>
+            {calendarDays.map((item, idx) => {
+              const esHoy = isSameDay(item.date, hoy);
+              const esSeleccionado = isSameDay(item.date, diaSeleccionado);
+              const tieneClases = item.currentMonth && diasConClases.has(item.date.getDate());
+
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  style={s.calCell}
+                  onPress={() => item.currentMonth && setDiaSeleccionado(new Date(item.date.getFullYear(), item.date.getMonth(), item.date.getDate()))}
+                  activeOpacity={item.currentMonth ? 0.7 : 1}
+                >
+                  <View style={[
+                    s.calDia,
+                    tieneClases && !esSeleccionado && s.calDiaConClases,
+                    esHoy && !esSeleccionado && s.calDiaHoy,
+                    esSeleccionado && s.calDiaSeleccionado,
+                  ]}>
+                    <Text style={[
+                      s.calDiaTexto,
+                      !item.currentMonth && s.calDiaTextoOtroMes,
+                      esHoy && !esSeleccionado && { color: COLOR_HOY, fontFamily: 'Inter_700Bold' },
+                      esSeleccionado && s.calDiaTextoSeleccionado,
+                    ]}>
+                      {item.date.getDate()}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
         {/* ── Agenda del día ── */}
         <View style={s.seccion}>
@@ -293,7 +325,7 @@ export default function Agenda() {
                 <Text style={s.accionEmoji}>＋</Text>
                 <Text style={s.accionTexto}>Nueva Clase</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[s.accionBtn, { borderColor: (paleta.secondary || '#592da2') + '50' }]} onPress={() => router.push('/finanzas')} activeOpacity={0.8}>
+              <TouchableOpacity style={[s.accionBtn, { borderColor: (paleta.secondary || '#592da2') + '50' }]} onPress={() => router.navigate('/(tabs)/finanzas')} activeOpacity={0.8}>
                 <Text style={s.accionEmoji}>📊</Text>
                 <Text style={[s.accionTexto, { color: paleta.secondary || '#d3bbff' }]}>Reporte</Text>
               </TouchableOpacity>
@@ -303,6 +335,18 @@ export default function Agenda() {
 
         <View style={{ height: 120 }} />
       </ScrollView>
+
+      <TouchableOpacity
+        style={s.fab}
+        onPress={() => Linking.openURL('https://calendar.google.com/calendar/r').catch(() => Linking.openURL('https://calendar.google.com'))}
+        activeOpacity={0.85}
+      >
+        <Image
+          source={{ uri: 'https://www.gstatic.com/images/branding/product/2x/calendar_2020q4_48dp.png' }}
+          style={s.fabIcon}
+        />
+        <Text style={s.fabTexto}>Google Calendar</Text>
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -313,6 +357,7 @@ function makeStyles(p) {
   return StyleSheet.create({
     contenedor: { flex: 1, backgroundColor: p.bg },
     scroll: { paddingHorizontal: 16, paddingTop: 8 },
+    calSeccion: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 },
 
     header: {
       flexDirection: 'row', alignItems: 'center',
@@ -450,5 +495,25 @@ function makeStyles(p) {
     },
     accionEmoji: { fontSize: 22, marginBottom: 4 },
     accionTexto: { color: p.primary, fontSize: 10, fontFamily: 'Inter_700Bold', textTransform: 'uppercase', letterSpacing: 0.5, textAlign: 'center' },
+
+    fab: {
+      position: 'absolute',
+      bottom: 72,
+      right: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      backgroundColor: '#ffffff',
+      borderRadius: 28,
+      paddingVertical: 11,
+      paddingHorizontal: 16,
+      elevation: 6,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.15,
+      shadowRadius: 8,
+    },
+    fabIcon: { width: 24, height: 24 },
+    fabTexto: { color: '#1a1a1a', fontSize: 14, fontFamily: 'Inter_600SemiBold' },
   });
 }

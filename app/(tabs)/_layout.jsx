@@ -28,17 +28,17 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Alumnos',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👥</Text>,
-        }}
-      />
-      <Tabs.Screen
         name="agenda"
         options={{
           title: 'Calendario',
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>📅</Text>,
+        }}
+      />
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'Alumnos',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>👥</Text>,
         }}
       />
       <Tabs.Screen

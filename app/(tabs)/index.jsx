@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, Modal } from 'react-native';
+import { useState, useMemo } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, StatusBar, Modal } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import { useAlumnos } from '../../context/AlumnosContext';
@@ -12,9 +13,9 @@ export default function PantallaAlumnos() {
   const [modalFAB, setModalFAB] = useState(false);
 
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
-  if (!fontsLoaded) return null;
+  const s = useMemo(() => makeStyles(paleta), [paleta]);
 
-  const s = makeStyles(paleta);
+  if (!fontsLoaded) return null;
   const items = [...alumnos, ...talleres];
 
   function irAPerfil(item) {

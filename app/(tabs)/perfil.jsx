@@ -1,13 +1,30 @@
-import { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, ScrollView, TextInput, Modal, Alert } from 'react-native';
+import { useState, useMemo } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, TextInput, Modal, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import { useAlumnos } from '../../context/AlumnosContext';
 import { useTema } from '../../context/TemaContext';
+import { parseFecha } from '../../lib/fechas';
 
 const ESTADOS = ['pendiente', 'realizada', 'cancelada', 'reagendada'];
 const ESTADO_LABEL = { pendiente: 'Pendiente', realizada: 'Realizada', cancelada: 'Cancelada', reagendada: 'Reagendada' };
+
+const DIA_A_JS = { 'Lunes': 1, 'Martes': 2, 'Miércoles': 3, 'Jueves': 4, 'Viernes': 5, 'Sábado': 6, 'Domingo': 0 };
+
+function proximaFechaHabitual(diaSemana, horaStr) {
+  const targetDay = DIA_A_JS[diaSemana];
+  if (targetDay === undefined) return new Date();
+  const [hh, mm] = (horaStr || '00:00').split(':').map(n => parseInt(n) || 0);
+  const ahora = new Date();
+  const diasHasta = (targetDay - ahora.getDay() + 7) % 7;
+  const fecha = new Date();
+  fecha.setDate(fecha.getDate() + diasHasta);
+  fecha.setHours(hh, mm, 0, 0);
+  if (fecha <= ahora) fecha.setDate(fecha.getDate() + 7);
+  return fecha;
+}
 
 const INSTRUMENTOS = [
   { nombre: 'Guitarra', emoji: '🎸' }, { nombre: 'Piano', emoji: '🎹' },
@@ -19,6 +36,10 @@ const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', '
 
 export default function Perfil() {
   const { id, tipo } = useLocalSearchParams();
+  return <PerfilContent key={`${tipo}-${id}`} id={id} tipo={tipo} />;
+}
+
+function PerfilContent({ id, tipo }) {
   const router = useRouter();
   const { alumnos, talleres, clases, editarAlumno, eliminarAlumno, editarTaller, eliminarTaller, agregarClase, editarClase, eliminarClase, cambiarEstadoClase, togglePagadaClase } = useAlumnos();
   const { tema, paleta } = useTema();
@@ -28,14 +49,9 @@ export default function Perfil() {
     ? talleres.find(t => t.id === id)
     : alumnos.find(a => a.id === id);
   const clasesEntidad = [...(clases[id] || [])].sort((a, b) => {
-    const parsear = f => {
-      if (!f) return 0;
-      const p = f.split(/[\/\-]/);
-      if (p.length !== 3) return 0;
-      const [x, y, z] = p.map(Number);
-      return x > 31 ? new Date(x, y - 1, z).getTime() : new Date(z, y - 1, x).getTime();
-    };
-    return parsear(b.fecha) - parsear(a.fecha);
+    const ta = parseFecha(a.fecha)?.getTime() ?? 0;
+    const tb = parseFecha(b.fecha)?.getTime() ?? 0;
+    return tb - ta;
   });
 
   const [mostrarFormClase, setMostrarFormClase] = useState(false);
@@ -59,7 +75,15 @@ export default function Perfil() {
   );
   const [editParticipantes, setEditParticipantes] = useState(entidad?.participantes || []);
   const [editDia, setEditDia] = useState(entidad?.diaSemana || 'Lunes');
-  const [editHora, setEditHora] = useState(new Date());
+  const [editHora, setEditHora] = useState(() => {
+    if (entidad?.hora) {
+      const [hh, mm] = entidad.hora.split(':').map(Number);
+      const d = new Date();
+      d.setHours(isNaN(hh) ? 0 : hh, isNaN(mm) ? 0 : mm, 0, 0);
+      return d;
+    }
+    return new Date();
+  });
   const [mostrarEditPickerHora, setMostrarEditPickerHora] = useState(false);
   const [mostrarEditDias, setMostrarEditDias] = useState(false);
 
@@ -69,19 +93,49 @@ export default function Perfil() {
   const [editValorCustom, setEditValorCustom] = useState('');
   const [editFechaClase, setEditFechaClase] = useState(new Date());
   const [mostrarPickerEditFecha, setMostrarPickerEditFecha] = useState(false);
+  const [editHoraClase, setEditHoraClase] = useState(new Date());
+  const [mostrarPickerEditHoraClase, setMostrarPickerEditHoraClase] = useState(false);
   const [editEstado, setEditEstado] = useState('pendiente');
 
   const [dropdownEstadoId, setDropdownEstadoId] = useState(null);
+  const [editValor, setEditValor] = useState(
+    String(esTaller ? (entidad?.valorPorAlumno || '') : (entidad?.valorClase || ''))
+  );
 
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
-  if (!fontsLoaded || !entidad) return null;
+  const s = useMemo(() => makeStyles(paleta), [paleta]);
 
-  const s = makeStyles(paleta);
+  if (!fontsLoaded) return null;
+  if (!entidad) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: paleta.bg }}>
+        <View style={s.header}>
+          <TouchableOpacity onPress={() => router.back()} style={s.headerBtn}>
+            <Text style={s.headerBtnTexto}>←</Text>
+          </TouchableOpacity>
+          <Text style={s.headerTitulo}>Perfil</Text>
+          <View style={s.headerBtn} />
+        </View>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: paleta.onSurfaceVariant, fontSize: 15, fontFamily: 'Inter_400Regular' }}>
+            No se encontró el perfil.
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   const fechaFormateada = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   const horaFormateada = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
   function handleAgregarClase() {
+    if (nuevoValorCustom) {
+      const v = parseInt(nuevoValorCustom);
+      if (isNaN(v) || v <= 0) {
+        Alert.alert('Valor inválido', 'El valor personalizado debe ser un número mayor a 0.');
+        return;
+      }
+    }
     agregarClase(id, {
       fecha: fechaFormateada(nuevaFecha),
       hora: horaFormateada(nuevaHora),
@@ -128,43 +182,74 @@ export default function Perfil() {
   }
 
   function handleGuardarEdicion() {
+    if (!editNombre.trim()) {
+      Alert.alert('Error', 'El nombre es obligatorio.');
+      return;
+    }
     const horaStr = horaFormateada(editHora);
+    const valorInt = parseInt(editValor) || 0;
     if (esTaller) {
       editarTaller({
         ...entidad,
-        nombre: editNombre,
+        nombre: editNombre.trim(),
         instrumento: editInstrumentos.map(i => i.nombre).join(', '),
         avatar: editInstrumentos.map(i => i.emoji).slice(0, 2).join('') || entidad.avatar,
         diaSemana: editDia,
         hora: horaStr,
         participantes: editParticipantes,
+        valorPorAlumno: valorInt,
       });
     } else {
-      editarAlumno({ ...entidad, nombre: editNombre, instrumento: editInstrumento.nombre, avatar: editInstrumento.emoji, diaSemana: editDia, hora: horaStr });
+      editarAlumno({
+        ...entidad,
+        nombre: editNombre.trim(),
+        instrumento: editInstrumento.nombre,
+        avatar: editInstrumento.emoji,
+        diaSemana: editDia,
+        hora: horaStr,
+        valorClase: valorInt,
+      });
     }
     setModalEditarAlumno(false);
   }
 
-  function abrirEditarClase(clase) {
+  function abrirEditarClase(clase, usarHabitual = false) {
     setClaseEditando(clase);
     setEditPlanificacion(clase.planificacion);
     setEditTareas(clase.tareas);
     setEditEstado(clase.estado || 'pendiente');
     setEditValorCustom(clase.valorCustom ? String(clase.valorCustom) : '');
-    const partes = clase.fecha.split('/');
-    if (partes.length === 3) {
-      setEditFechaClase(new Date(Number(partes[2]), Number(partes[1]) - 1, Number(partes[0])));
-    }
     setMostrarPickerEditFecha(false);
+    setMostrarPickerEditHoraClase(false);
+    if (usarHabitual) {
+      const defaults = proximaFechaHabitual(entidad.diaSemana, entidad.hora);
+      setEditFechaClase(defaults);
+      setEditHoraClase(defaults);
+    } else {
+      const fechaParsed = parseFecha(clase.fecha);
+      if (fechaParsed) setEditFechaClase(fechaParsed);
+      const [hh, mm] = (clase.hora || '00:00').split(':').map(Number);
+      const horaDate = new Date();
+      horaDate.setHours(isNaN(hh) ? 0 : hh, isNaN(mm) ? 0 : mm, 0, 0);
+      setEditHoraClase(horaDate);
+    }
   }
 
   function handleGuardarClase() {
+    if (editValorCustom) {
+      const v = parseInt(editValorCustom);
+      if (isNaN(v) || v <= 0) {
+        Alert.alert('Valor inválido', 'El valor personalizado debe ser un número mayor a 0.');
+        return;
+      }
+    }
     editarClase(id, {
       ...claseEditando,
       planificacion: editPlanificacion,
       tareas: editTareas,
       estado: editEstado,
       fecha: fechaFormateada(editFechaClase),
+      hora: horaFormateada(editHoraClase),
       valorCustom: editValorCustom ? parseInt(editValorCustom) : null,
     });
     setClaseEditando(null);
@@ -234,32 +319,48 @@ export default function Perfil() {
 
         <View style={s.px}>
           {!mostrarFormClase ? (
-            <TouchableOpacity style={s.btnAgregarClase} onPress={() => setMostrarFormClase(true)}>
+            <TouchableOpacity style={s.btnAgregarClase} onPress={() => {
+              const defaults = proximaFechaHabitual(entidad.diaSemana, entidad.hora);
+              setNuevaFecha(defaults);
+              setNuevaHora(defaults);
+              setMostrarFormClase(true);
+            }}>
               <Text style={s.btnAgregarClaseTexto}>＋  Agregar clase</Text>
             </TouchableOpacity>
           ) : (
             <View style={s.formulario}>
               <Text style={s.formLabel}>📅 Fecha</Text>
-              <TouchableOpacity style={s.selector} onPress={() => setMostrarPickerFecha(!mostrarPickerFecha)}>
+              <TouchableOpacity style={s.selector} onPress={() => setMostrarPickerFecha(true)}>
                 <Text style={s.selectorTexto}>{fechaFormateada(nuevaFecha)}</Text>
                 <Text style={s.selectorFlecha}>›</Text>
               </TouchableOpacity>
               {mostrarPickerFecha && (
-                <View style={s.pickerBox}>
-                  <DateTimePicker value={nuevaFecha} mode="date" display="spinner" locale="es-CL" onChange={(_, d) => { if (d) setNuevaFecha(d); }} style={s.picker} textColor={paleta.onSurface} />
-                  <TouchableOpacity style={s.btnConfirmar} onPress={() => setMostrarPickerFecha(false)}><Text style={s.btnConfirmarTexto}>✅ Confirmar</Text></TouchableOpacity>
-                </View>
+                <DateTimePicker
+                  value={nuevaFecha}
+                  mode="date"
+                  display="default"
+                  onChange={(event, d) => {
+                    setMostrarPickerFecha(false);
+                    if (event.type === 'set' && d) setNuevaFecha(d);
+                  }}
+                />
               )}
               <Text style={s.formLabel}>🕐 Hora</Text>
-              <TouchableOpacity style={s.selector} onPress={() => setMostrarPickerHora(!mostrarPickerHora)}>
+              <TouchableOpacity style={s.selector} onPress={() => setMostrarPickerHora(true)}>
                 <Text style={s.selectorTexto}>{horaFormateada(nuevaHora)}hs</Text>
                 <Text style={s.selectorFlecha}>›</Text>
               </TouchableOpacity>
               {mostrarPickerHora && (
-                <View style={s.pickerBox}>
-                  <DateTimePicker value={nuevaHora} mode="time" display="spinner" minuteInterval={5} onChange={(_, d) => { if (d) setNuevaHora(d); }} style={s.picker} textColor={paleta.onSurface} />
-                  <TouchableOpacity style={s.btnConfirmar} onPress={() => setMostrarPickerHora(false)}><Text style={s.btnConfirmarTexto}>✅ Confirmar</Text></TouchableOpacity>
-                </View>
+                <DateTimePicker
+                  value={nuevaHora}
+                  mode="time"
+                  display="default"
+                  minuteInterval={5}
+                  onChange={(event, d) => {
+                    setMostrarPickerHora(false);
+                    if (event.type === 'set' && d) setNuevaHora(d);
+                  }}
+                />
               )}
               <Text style={s.formLabel}>📋 Planificación</Text>
               <TextInput style={[s.input, { minHeight: 80 }]} placeholder="¿Qué vas a enseñar?" placeholderTextColor={paleta.outline} value={nuevaPlanificacion} onChangeText={setNuevaPlanificacion} multiline />
@@ -299,7 +400,7 @@ export default function Perfil() {
                           <TouchableOpacity key={e} style={s.estadoOpcion} onPress={() => {
                             cambiarEstadoClase(id, clase.id, e);
                             setDropdownEstadoId(null);
-                            if (e === 'reagendada') setTimeout(() => abrirEditarClase({ ...clase, estado: 'reagendada' }), 150);
+                            if (e === 'reagendada') setTimeout(() => abrirEditarClase({ ...clase, estado: 'reagendada' }, true), 150);
                           }}>
                             <Text style={[s.estadoOpcionTexto, (clase.estado || 'pendiente') === e && { color: paleta.primary, fontFamily: 'Inter_700Bold' }, e === 'reagendada' && { color: '#F59E0B' }]}>{ESTADO_LABEL[e]}</Text>
                           </TouchableOpacity>
@@ -362,7 +463,7 @@ export default function Perfil() {
       </ScrollView>
 
       {/* Modal editar alumno/taller */}
-      <Modal visible={modalEditarAlumno} animationType="slide" transparent>
+      <Modal visible={modalEditarAlumno} animationType="slide" transparent onRequestClose={() => setModalEditarAlumno(false)}>
         <View style={s.modalFondo}>
           <ScrollView contentContainerStyle={s.modalContenido} keyboardShouldPersistTaps="handled">
             <Text style={s.modalTitulo}>✏️ Editar {esTaller ? 'Taller' : 'Alumno'}</Text>
@@ -407,6 +508,15 @@ export default function Perfil() {
                 )}
               </>
             )}
+            <Text style={s.formLabel}>{esTaller ? 'Valor por alumno (CLP)' : 'Valor de la clase (CLP)'}</Text>
+            <TextInput
+              style={s.input}
+              placeholder="0"
+              placeholderTextColor={paleta.outline}
+              value={editValor}
+              onChangeText={setEditValor}
+              keyboardType="numeric"
+            />
             <Text style={s.formLabel}>Día habitual</Text>
             <TouchableOpacity style={s.selector} onPress={() => setMostrarEditDias(!mostrarEditDias)}>
               <Text style={s.selectorTexto}>📅  {editDia}</Text>
@@ -422,15 +532,21 @@ export default function Perfil() {
               </View>
             )}
             <Text style={s.formLabel}>Hora habitual</Text>
-            <TouchableOpacity style={s.selector} onPress={() => setMostrarEditPickerHora(!mostrarEditPickerHora)}>
+            <TouchableOpacity style={s.selector} onPress={() => setMostrarEditPickerHora(true)}>
               <Text style={s.selectorTexto}>🕐  {horaFormateada(editHora)}hs</Text>
               <Text style={s.selectorFlecha}>›</Text>
             </TouchableOpacity>
             {mostrarEditPickerHora && (
-              <View style={s.pickerBox}>
-                <DateTimePicker value={editHora} mode="time" display="spinner" minuteInterval={5} onChange={(_, d) => { if (d) setEditHora(d); }} style={s.picker} textColor={paleta.onSurface} />
-                <TouchableOpacity style={s.btnConfirmar} onPress={() => setMostrarEditPickerHora(false)}><Text style={s.btnConfirmarTexto}>✅ Confirmar</Text></TouchableOpacity>
-              </View>
+              <DateTimePicker
+                value={editHora}
+                mode="time"
+                display="default"
+                minuteInterval={5}
+                onChange={(event, d) => {
+                  setMostrarEditPickerHora(false);
+                  if (event.type === 'set' && d) setEditHora(d);
+                }}
+              />
             )}
             <TouchableOpacity style={[s.btnGuardar, { marginTop: 20 }]} onPress={handleGuardarEdicion}><Text style={s.btnGuardarTexto}>💾 Guardar Cambios</Text></TouchableOpacity>
             <TouchableOpacity style={s.btnCancelarInline} onPress={() => setModalEditarAlumno(false)}><Text style={s.btnCancelarTexto}>Cancelar</Text></TouchableOpacity>
@@ -439,20 +555,42 @@ export default function Perfil() {
       </Modal>
 
       {/* Modal editar clase */}
-      <Modal visible={!!claseEditando} animationType="slide" transparent>
+      <Modal visible={!!claseEditando} animationType="slide" transparent onRequestClose={() => setClaseEditando(null)}>
         <View style={s.modalFondo}>
           <ScrollView contentContainerStyle={s.modalContenido} keyboardShouldPersistTaps="handled">
             <Text style={s.modalTitulo}>✏️ Editar Clase</Text>
             <Text style={s.formLabel}>📅 Fecha</Text>
-            <TouchableOpacity style={s.selector} onPress={() => setMostrarPickerEditFecha(!mostrarPickerEditFecha)}>
+            <TouchableOpacity style={s.selector} onPress={() => setMostrarPickerEditFecha(true)}>
               <Text style={s.selectorTexto}>{fechaFormateada(editFechaClase)}</Text>
               <Text style={s.selectorFlecha}>›</Text>
             </TouchableOpacity>
             {mostrarPickerEditFecha && (
-              <View style={s.pickerBox}>
-                <DateTimePicker value={editFechaClase} mode="date" display="spinner" locale="es-CL" onChange={(_, d) => { if (d) setEditFechaClase(d); }} style={s.picker} textColor={paleta.onSurface} />
-                <TouchableOpacity style={s.btnConfirmar} onPress={() => setMostrarPickerEditFecha(false)}><Text style={s.btnConfirmarTexto}>✅ Confirmar</Text></TouchableOpacity>
-              </View>
+              <DateTimePicker
+                value={editFechaClase}
+                mode="date"
+                display="default"
+                onChange={(event, d) => {
+                  setMostrarPickerEditFecha(false);
+                  if (event.type === 'set' && d) setEditFechaClase(d);
+                }}
+              />
+            )}
+            <Text style={s.formLabel}>🕐 Hora</Text>
+            <TouchableOpacity style={s.selector} onPress={() => setMostrarPickerEditHoraClase(true)}>
+              <Text style={s.selectorTexto}>{horaFormateada(editHoraClase)}hs</Text>
+              <Text style={s.selectorFlecha}>›</Text>
+            </TouchableOpacity>
+            {mostrarPickerEditHoraClase && (
+              <DateTimePicker
+                value={editHoraClase}
+                mode="time"
+                display="default"
+                minuteInterval={5}
+                onChange={(event, d) => {
+                  setMostrarPickerEditHoraClase(false);
+                  if (event.type === 'set' && d) setEditHoraClase(d);
+                }}
+              />
             )}
             <Text style={s.formLabel}>Estado</Text>
             <View style={s.estadosRow}>

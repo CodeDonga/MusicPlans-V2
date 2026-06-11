@@ -6,8 +6,33 @@
     "allow": [
       "Edit",
       "Write",
-      "Bash(pnpm start)",
-      "Bash(pnpm install)"
+      "Bash(adb *)",
+      "Bash(emulator *)",
+      "Bash(tasklist *)",
+      "Bash(tasklist)",
+      "Bash(npx *)",
+      "Bash(pnpm *)",
+      "Bash(git *)",
+      "PowerShell(adb *)",
+      "PowerShell(emulator *)",
+      "PowerShell(tasklist *)",
+      "PowerShell(tasklist)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-Process)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Start-Process *)",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(Select-String *)",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Set-Location *)",
+      "PowerShell(subst *)",
+      "PowerShell(npx *)",
+      "PowerShell(pnpm *)",
+      "PowerShell(git *)",
+      "PowerShell(cmd *)",
+      "PowerShell(Write-Host *)",
+      "PowerShell(mklink *)"
     ]
   }
 }
