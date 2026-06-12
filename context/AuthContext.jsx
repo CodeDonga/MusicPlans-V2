@@ -183,6 +183,7 @@ export function AuthProvider({ children }) {
       try { codigo = (await error?.context?.json())?.error ?? null } catch {}
       // revoked: el usuario quitó el acceso desde Google; no_token: no hay refresh
       // token guardado (conexión previa a GC-05) — en ambos casos hay que reconectar
+      if (__DEV__) console.warn('[gcal] calendar-token sin access token:', codigo ?? error?.message ?? 'sin detalle')
       if (codigo === 'revoked' || codigo === 'no_token') await desconectarCalendar()
       return null
     }

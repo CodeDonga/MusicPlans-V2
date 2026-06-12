@@ -36,6 +36,9 @@
 ### Eliminar evento
 - [ ] Al eliminar una clase con `google_event_id` → elimina el evento de Google Calendar.
 - [ ] Al cancelar una clase con `google_event_id` → elimina el evento de Google Calendar.
+- [ ] **Fuente de verdad del id (BUG-29):** antes de eliminar o cancelar, el `google_event_id` se lee desde Supabase — no del estado en memoria, que puede no tener el id (p. ej. si se recargó desde la DB antes de que el id terminara de persistirse). Aplica a: eliminar clase, eliminar alumno/taller (clases no pagadas) y cancelar clase.
+- [ ] `eliminarEvento` informa el resultado: 2xx/404/410 cuentan como éxito (el evento ya no existe en Calendar); cualquier otro status devuelve `false` y se loguea en desarrollo (`__DEV__`).
+- [ ] La persistencia de `google_event_id` tras crear un evento (alta, reactivación, sincronización) verifica el error del UPDATE y lo loguea en desarrollo — antes fallaba en silencio (causa raíz de BUG-29).
 
 ### Conflictos de horario (GC-06)
 

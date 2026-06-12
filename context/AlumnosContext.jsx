@@ -182,14 +182,44 @@ export function AlumnosProvider({ children }) {
     };
   }
 
+  async function persistirEventoId(claseId, googleEventId) {
+    const { error } = await supabase
+      .from('clases')
+      .update({ google_event_id: googleEventId })
+      .eq('id', claseId);
+    if (error && __DEV__) console.warn('[gcal] no se pudo persistir google_event_id:', error.message);
+    return !error;
+  }
+
   async function recrearEventoGCal(token, entidadId, clase, entidadNombre) {
     const googleEventId = await safeGCal(() => crearEvento(token, clase, entidadNombre));
     if (!googleEventId) return;
-    await supabase.from('clases').update({ google_event_id: googleEventId }).eq('id', clase.id);
+    await persistirEventoId(clase.id, googleEventId);
     setClases(prev => ({
       ...prev,
       [entidadId]: (prev[entidadId] || []).map(c => c.id === clase.id ? { ...c, googleEventId } : c),
     }));
+  }
+
+  // BUG-29: el google_event_id se lee siempre de la DB (fuente de verdad) antes de
+  // borrar/cancelar — el estado en memoria puede no tener el id (p. ej. recargado
+  // desde la DB antes de que la persistencia del id terminara)
+  async function eventoIdDesdeDB(claseId) {
+    const { data } = await supabase
+      .from('clases')
+      .select('google_event_id')
+      .eq('id', claseId)
+      .maybeSingle();
+    return data?.google_event_id ?? null;
+  }
+
+  async function conEventosDeDB(clasesLocales, entidadId) {
+    const { data } = await supabase
+      .from('clases')
+      .select('id, google_event_id')
+      .eq('entidad_id', entidadId);
+    const eventos = new Map((data || []).map(f => [f.id, f.google_event_id]));
+    return clasesLocales.map(c => ({ ...c, googleEventId: eventos.get(c.id) ?? c.googleEventId }));
   }
 
   async function limpiarClasesBorradas(clasesBorradas) {
@@ -235,7 +265,7 @@ export function AlumnosProvider({ children }) {
   async function eliminarAlumno(id) {
     const entidad = alumnos.find(a => a.id === id);
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
-    const clasesBorradas = (clases[id] || []).filter(c => !c.pagada);
+    const clasesBorradas = await conEventosDeDB((clases[id] || []).filter(c => !c.pagada), id);
 
     await supabase.from('clases').delete().eq('entidad_id', id).eq('pagada', false);
     await supabase.from('clases').delete().eq('entidad_id', id).is('pagada', null);
@@ -287,7 +317,7 @@ export function AlumnosProvider({ children }) {
   async function eliminarTaller(id) {
     const entidad = talleres.find(t => t.id === id);
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
-    const clasesBorradas = (clases[id] || []).filter(c => !c.pagada);
+    const clasesBorradas = await conEventosDeDB((clases[id] || []).filter(c => !c.pagada), id);
     const valorUnitario = (entidad?.valorPorAlumno || 0) * (entidad?.participantes?.length || 1);
 
     await supabase.from('clases').delete().eq('entidad_id', id).eq('pagada', false);
@@ -357,7 +387,7 @@ export function AlumnosProvider({ children }) {
       if (token) {
         const googleEventId = await safeGCal(() => crearEvento(token, claseDB, entidad?.nombre || ''));
         if (googleEventId) {
-          await supabase.from('clases').update({ google_event_id: googleEventId }).eq('id', data.id);
+          await persistirEventoId(data.id, googleEventId);
           setClases(prev => ({
             ...prev,
             [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? { ...claseDB, googleEventId } : c),
@@ -380,6 +410,7 @@ export function AlumnosProvider({ children }) {
     }));
 
     const cancelando = claseActualizada.estado === 'cancelada';
+    const eventoIdCancelar = cancelando ? await eventoIdDesdeDB(claseActualizada.id) : null;
     const dbUpdate = {
       fecha: claseActualizada.fecha,
       hora: claseActualizada.hora,
@@ -388,7 +419,7 @@ export function AlumnosProvider({ children }) {
       estado: claseActualizada.estado,
       valor_custom: claseActualizada.valorCustom ?? null,
     };
-    if (cancelando && claseActualizada.googleEventId) dbUpdate.google_event_id = null;
+    if (eventoIdCancelar) dbUpdate.google_event_id = null;
 
     const { error } = await supabase.from('clases').update(dbUpdate).eq('id', claseActualizada.id);
     if (error) { cargarDatos(); return; }
@@ -397,9 +428,9 @@ export function AlumnosProvider({ children }) {
 
     if (cancelando) {
       cancelarNotificacion(claseActualizada.id);
-      if (claseActualizada.googleEventId) {
+      if (eventoIdCancelar) {
         const token = await getGoogleToken();
-        if (token) await safeGCal(() => eliminarEvento(token, claseActualizada.googleEventId));
+        if (token) await safeGCal(() => eliminarEvento(token, eventoIdCancelar));
         setClases(prev => ({
           ...prev,
           [entidadId]: (prev[entidadId] || []).map(c =>
@@ -411,8 +442,9 @@ export function AlumnosProvider({ children }) {
       programarNotificacion(claseActualizada.id, entidad?.nombre || '', claseActualizada.fecha, claseActualizada.hora);
       const token = await getGoogleToken();
       if (token) {
-        if (claseActualizada.googleEventId) {
-          await safeGCal(() => editarEvento(token, claseActualizada.googleEventId, claseActualizada, entidad?.nombre || ''));
+        const eventoId = claseActualizada.googleEventId ?? await eventoIdDesdeDB(claseActualizada.id);
+        if (eventoId) {
+          await safeGCal(() => editarEvento(token, eventoId, claseActualizada, entidad?.nombre || ''));
         } else {
           await recrearEventoGCal(token, entidadId, claseActualizada, entidad?.nombre || '');
         }
@@ -421,13 +453,14 @@ export function AlumnosProvider({ children }) {
   }
 
   async function eliminarClase(entidadId, claseId) {
-    const clase = (clases[entidadId] || []).find(c => c.id === claseId);
+    const googleEventId = await eventoIdDesdeDB(claseId);
     const { error } = await supabase.from('clases').delete().eq('id', claseId);
     if (error) return;
     cancelarNotificacion(claseId);
-    if (clase?.googleEventId) {
+    if (googleEventId) {
       const token = await getGoogleToken();
-      if (token) await safeGCal(() => eliminarEvento(token, clase.googleEventId));
+      if (token) await safeGCal(() => eliminarEvento(token, googleEventId));
+      else if (__DEV__) console.warn('[gcal] sin token para eliminar evento de clase', claseId);
     }
     setClases(prev => ({
       ...prev,
@@ -442,15 +475,16 @@ export function AlumnosProvider({ children }) {
       ...prev,
       [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, estado } : c),
     }));
+    const eventoIdCancelar = estado === 'cancelada' ? await eventoIdDesdeDB(claseId) : null;
     const dbUpdate = { estado };
-    if (estado === 'cancelada' && clase?.googleEventId) dbUpdate.google_event_id = null;
+    if (eventoIdCancelar) dbUpdate.google_event_id = null;
     const { error } = await supabase.from('clases').update(dbUpdate).eq('id', claseId);
     if (error) cargarDatos();
     if (estado === 'cancelada') {
       cancelarNotificacion(claseId);
-      if (clase?.googleEventId) {
+      if (eventoIdCancelar) {
         const token = await getGoogleToken();
-        if (token) await safeGCal(() => eliminarEvento(token, clase.googleEventId));
+        if (token) await safeGCal(() => eliminarEvento(token, eventoIdCancelar));
         setClases(prev => ({
           ...prev,
           [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, googleEventId: null } : c),
@@ -459,7 +493,7 @@ export function AlumnosProvider({ children }) {
     } else if (estadoPrevio === 'cancelada' && clase) {
       const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
       programarNotificacion(claseId, entidad?.nombre || '', clase.fecha, clase.hora);
-      if (!clase.googleEventId) {
+      if (!clase.googleEventId && !(await eventoIdDesdeDB(claseId))) {
         const token = await getGoogleToken();
         if (token) await recrearEventoGCal(token, entidadId, { ...clase, estado }, entidad?.nombre || '');
       }
@@ -494,6 +528,12 @@ export function AlumnosProvider({ children }) {
     const token = await getGoogleToken();
     if (!token) return 0;
 
+    const { data: filasDB } = await supabase
+      .from('clases')
+      .select('id, google_event_id')
+      .eq('user_id', userIdRef.current);
+    const eventosDB = new Map((filasDB || []).map(f => [f.id, f.google_event_id]));
+
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0);
     const actualizaciones = [];
@@ -503,7 +543,7 @@ export function AlumnosProvider({ children }) {
       if (!entidad) continue;
 
       for (const clase of clasesEntidad) {
-        if (clase.googleEventId) continue;
+        if (eventosDB.get(clase.id) ?? clase.googleEventId) continue;
         if (clase.estado === 'cancelada') continue;
         const fechaClase = parseFecha(clase.fecha);
         if (!fechaClase || fechaClase < hoy) continue;
@@ -511,7 +551,7 @@ export function AlumnosProvider({ children }) {
         try {
           const googleEventId = await crearEvento(token, clase, entidad.nombre);
           if (googleEventId) {
-            await supabase.from('clases').update({ google_event_id: googleEventId }).eq('id', clase.id);
+            await persistirEventoId(clase.id, googleEventId);
             actualizaciones.push({ entidadId, claseId: clase.id, googleEventId });
           }
         } catch (e) {

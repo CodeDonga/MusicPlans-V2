@@ -2,7 +2,7 @@
 > Tareas atómicas y verificables. Cada tarea tiene un criterio de aceptación claro.  
 > Estado: ✅ Hecho | 🔄 En progreso | ⬜ Pendiente | 🚫 Bloqueado
 >
-> **Bugs conocidos:** BUG-29 pendiente (prioridad alta — Calendar es fundamental en la app). BUG-20..28, ARQ-07..09 corregidos el 2026-06-11.
+> **Bugs conocidos:** sin pendientes. BUG-20..28, ARQ-07..09 corregidos el 2026-06-11; BUG-29 corregido y verificado en dispositivo el 2026-06-12.
 
 ---
 
@@ -46,7 +46,7 @@
 | ARQ-07 | Colores hardcodeados fuera de la paleta | ✅ | `#ef4444` → `paleta.alert` (login/registro), `#F59E0B` → `paleta.warning` (perfil), `COLOR_HOY` → `paleta.onSurface` y fallbacks eliminados (agenda) |
 | ARQ-08 | `console.error` en producción | ✅ | Eliminado de `agregarTaller`; el error ya se propaga vía `{ error }` y Alert en `nuevo-taller.jsx` |
 | ARQ-09 | Paleta `secondary` oscuro difiere de la constitución | ✅ | Resuelto 2026-06-11: se actualizó la constitución a `#7C3AED` (decisión del usuario — `#4C1D95` sobre `#001230` da contraste ~1.6:1, ilegible como texto). El código ya estaba correcto |
-| BUG-29 | Borrar una clase no elimina su evento de Google Calendar | ⬜ | Reportado 2026-06-11 en dispositivo, con GC-05 ya operativo (crear clases sí sincroniza). **Prioridad alta**: Calendar es fundamental en la app. Pistas para investigar: (1) `eliminarEvento` en `lib/googleCalendar.js` traga errores no-401 en silencio — instrumentar el status real de la respuesta; (2) verificar que `googleEventId` no llegue null en el estado local al momento de borrar (clases sincronizadas vía `sincronizarClasesExistentes` o creadas en otra sesión); (3) revisar también el flujo de cancelar clase y `limpiarClasesBorradas`. Reproducir con Metro conectado para ver logs |
+| BUG-29 | Borrar una clase no elimina su evento de Google Calendar | ✅ | Corregido 2026-06-12. Causa raíz: cadena de fallos silenciosos — el UPDATE que persiste `google_event_id` no chequeaba error, y al recargar datos (AppState active) el estado en memoria perdía el id, así que el borrado saltaba la llamada a gCal. Fix: (1) el `google_event_id` se lee de la DB (fuente de verdad) antes de eliminar/cancelar clase y al eliminar alumno/taller (`eventoIdDesdeDB`/`conEventosDeDB`); (2) `eliminarEvento` devuelve éxito/fallo según status real (404/410 = ya no existe) y loguea en `__DEV__`; (3) `persistirEventoId` chequea el error del UPDATE; (4) anti-duplicados: `editarClase`/reactivación/`sincronizarClasesExistentes` consultan la DB antes de crear un evento nuevo. Verificado en dispositivo el 2026-06-12 |
 | BUG-28 | `conectarCalendar` pierde el `provider_token` en el flujo de hash — Calendar nunca sincroniza | ✅ | `AuthContext.jsx:128-131` — `setSession({access_token, refresh_token})` no acepta `provider_token`, así que `getGoogleToken()` siempre lee null. La conexión "parece exitosa" (flag + Alert) pero crear/sincronizar eventos falla en silencio. Fix: guardar el token en un ref en memoria (nunca persistido, conforme BUG-07/BUG-21) y usarlo como fallback en `getGoogleToken()`; limpiarlo en signOut/desconectar/TOKEN_EXPIRADO |
 
 ---
