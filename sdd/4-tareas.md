@@ -2,7 +2,7 @@
 > Tareas atómicas y verificables. Cada tarea tiene un criterio de aceptación claro.  
 > Estado: ✅ Hecho | 🔄 En progreso | ⬜ Pendiente | 🚫 Bloqueado
 >
-> **Bugs conocidos:** sin pendientes. BUG-20..28, ARQ-07..09 corregidos el 2026-06-11; BUG-29 corregido y verificado en dispositivo el 2026-06-12.
+> **Bugs conocidos:** sin pendientes. BUG-20..28, ARQ-07..09 corregidos el 2026-06-11; BUG-29 corregido y verificado en dispositivo el 2026-06-12; BUG-30 (privilegios de DB) corregido el 2026-06-13.
 
 ---
 
@@ -48,6 +48,24 @@
 | ARQ-09 | Paleta `secondary` oscuro difiere de la constitución | ✅ | Resuelto 2026-06-11: se actualizó la constitución a `#7C3AED` (decisión del usuario — `#4C1D95` sobre `#001230` da contraste ~1.6:1, ilegible como texto). El código ya estaba correcto |
 | BUG-29 | Borrar una clase no elimina su evento de Google Calendar | ✅ | Corregido 2026-06-12. Causa raíz: cadena de fallos silenciosos — el UPDATE que persiste `google_event_id` no chequeaba error, y al recargar datos (AppState active) el estado en memoria perdía el id, así que el borrado saltaba la llamada a gCal. Fix: (1) el `google_event_id` se lee de la DB (fuente de verdad) antes de eliminar/cancelar clase y al eliminar alumno/taller (`eventoIdDesdeDB`/`conEventosDeDB`); (2) `eliminarEvento` devuelve éxito/fallo según status real (404/410 = ya no existe) y loguea en `__DEV__`; (3) `persistirEventoId` chequea el error del UPDATE; (4) anti-duplicados: `editarClase`/reactivación/`sincronizarClasesExistentes` consultan la DB antes de crear un evento nuevo. Verificado en dispositivo el 2026-06-12 |
 | BUG-28 | `conectarCalendar` pierde el `provider_token` en el flujo de hash — Calendar nunca sincroniza | ✅ | `AuthContext.jsx:128-131` — `setSession({access_token, refresh_token})` no acepta `provider_token`, así que `getGoogleToken()` siempre lee null. La conexión "parece exitosa" (flag + Alert) pero crear/sincronizar eventos falla en silencio. Fix: guardar el token en un ref en memoria (nunca persistido, conforme BUG-07/BUG-21) y usarlo como fallback en `getGoogleToken()`; limpiarlo en signOut/desconectar/TOKEN_EXPIRADO |
+
+### Robustez previa al módulo de pagos (evaluación 2026-06-12)
+
+> Hallazgos de la auditoría completa de la app. ARQ-10..13 son **bloqueantes** antes de PF-01; el resto, muy recomendados.
+>
+> **Estado 2026-06-13:** resuelta toda la deuda no atada a pagos → ARQ-10 ✅, BUG-30 ✅, ARQ-13 🔄 (infra + tests de fechas listos; falta la máquina de estados de pagos), ARQ-14 ✅, ARQ-15 ✅, ARQ-16 ✅, ARQ-17 ✅. **Quedan para la fase de pagos:** ARQ-11 (bloquear `clases.pagada` en DB — rompería el toggle manual actual hasta que exista PF) y ARQ-12 (spec Flow→Khipu).
+
+| # | Tarea | Estado | Descripción |
+|---|---|---|---|
+| ARQ-10 | Versionar el esquema de la DB como baseline | ✅ | **Bloqueante.** Hecho 2026-06-12 vía Management API (Docker no disponible para `db pull`): migración `20260601000000_baseline.sql` con `alumnos`/`talleres`/`clases` + RLS + policies (idempotente). Auditoría RLS: ✅ RLS activo en las 4 tablas, policies correctas (`auth.uid() = user_id`; `google_tokens` sin SELECT). Cerrado 2026-06-13: baseline aplicado y **registrado en el historial remoto** (`schema_migrations`: baseline + google_tokens + fix_grants). Runner reutilizable `scripts/db-exec.ps1` (aplica/registra vía Management API). |
+| BUG-30 | Privilegios de DB rotos: GC-05 nunca funcionó (google_tokens vacía) | ✅ | Cerrado 2026-06-13: migración `20260612100000_fix_grants.sql` aplicada y registrada en prod. Verificado: `authenticated` con INSERT/UPDATE/DELETE en `google_tokens` (sin SELECT, RLS), `service_role` con SELECT en todas las tablas, `anon` sin TRUNCATE. `conectarCalendar` ahora chequea el error del insert (avisa en `__DEV__`). Detectado en auditoría ARQ-10. (1) `authenticated` sin INSERT/UPDATE/DELETE en `google_tokens` → el insert del refresh token en `conectarCalendar` (AuthContext:148-149, error ignorado) falla en silencio desde el día uno: la tabla tiene **0 filas** y el refresh automático jamás operó — Calendar vive del token en memoria (~55 min) y se "desconecta solo". (2) `service_role` sin SELECT en ninguna tabla pública → `calendar-token` no podría leer el token aunque existiera, y las Edge Functions de pagos no podrán leer `clases`. (3) TRUNCATE concedido a `anon`/`authenticated` (no respeta RLS). (4) Default privileges alterados: tablas futuras nacen sin permisos útiles. Fix: migración `20260612100000_fix_grants.sql` + chequear el error del insert en `conectarCalendar` |
+| ARQ-11 | Bloquear en DB la escritura cliente de `clases.pagada` | ⬜ | **Bloqueante.** Hoy el cliente escribe `pagada` directamente (`togglePagadaClase`); con dinero real es un agujero: cualquier JWT válido podría marcar clases pagadas sin pagar. Trigger o privilegio de columna que impida al rol `authenticated` modificar `pagada`; solo la Edge Function (service role) podrá hacerlo. Coordina con AL-18/PF-21/PF-22 |
+| ARQ-12 | Actualizar spec de pagos: Flow → Khipu | ⬜ | **Bloqueante.** `pagos-flow.md` está escrita contra la API de Flow. Reescribir contra Khipu: endpoints, firma HMAC del webhook, comisiones, y **verificar que Khipu soporte reembolso y anulación por API** (la spec asume ambos). Decidir además si PF-24 (push al profesor) entra en v1 — hoy no existe infra de push server→dispositivo |
+| ARQ-13 | Infraestructura de tests (jest-expo) | 🔄 | **Bloqueante.** Infra lista 2026-06-13: `jest-expo@54` + `jest@29` (instalados con `--legacy-peer-deps` por conflicto preexistente react/react-dom), preset + `transformIgnorePatterns` en `package.json`, scripts `test`/`test:watch`. Primeros tests: `lib/__tests__/fechas.test.js` (23 casos, incluye roundtrip de BUG-10). **Pendiente:** tests de la máquina de estados de pagos — se escriben junto con la spec (ARQ-12) antes de implementar PF. |
+| ARQ-14 | Observabilidad: Sentry o logging estructurado | ✅ | Cerrado 2026-06-13: **logging estructurado propio** (no Sentry — requería cuenta + rebuild de APK, decisión a revisar con el usuario). Tabla `error_logs` (RLS por `user_id`, migración `20260613100000`) + helper `lib/log.js` (`logWarn`/`logError`): en dev a consola, en prod persiste en Supabase. Instrumentados los puntos de DB/gCal/notificaciones en `AlumnosContext`, `AuthContext`, `notificaciones.js`, `googleCalendar.js` (reemplazan los `__DEV__ console.warn`). Mejora futura abierta: añadir Sentry encima para crashes nativos. |
+| ARQ-15 | Guard en `cargarDatos()` del AppState listener | ✅ | Cerrado 2026-06-13: contador `mutacionesEnCurso` (ref) que envuelve los 12 mutadores vía `conGuard`; el listener de AppState solo recarga al volver a foreground si `mutacionesEnCurso.current === 0`. Evita pisar estado optimista (familia BUG-29) y cubre el flujo de pagos "generar link → WhatsApp → volver". |
+| ARQ-16 | Errores silenciosos restantes | ✅ | Cerrado 2026-06-13: helper `borrarClasesNoPagadas` chequea el error de ambos deletes en `eliminarAlumno`/`eliminarTaller` y aborta (cargarDatos + return) para no dejar clases huérfanas; los `catch (_) {}` de `notificaciones.js` ahora loguean en `__DEV__`. |
+| ARQ-17 | Validación de montos en DB | ✅ | Cerrado 2026-06-13: migración `20260613000000_check_montos.sql` (aplicada + registrada). CHECK `>= 0 and <= 10000000` en `alumnos.valor_clase`, `talleres.valor_por_alumno`, `clases.valor_unitario` y `clases.valor_custom` (este último permite null). Se usa `>= 0` (no `> 0`) porque un valor 0 es válido (clase de cortesía / sin definir) y existe en datos reales. |
 
 ---
 
@@ -176,9 +194,10 @@
 
 ---
 
-## Módulo: Pagos Flow
+## Módulo: Pagos (pasarela en evaluación: Flow → Khipu, ver ARQ-12)
 
-> Spec completa en `pagos-flow.md`. Decisiones cerradas: pago = bundle de clases · disparador manual · comisión absorbida por profesor · link público sin login · expiración 7 días.
+> Spec completa en `pagos-flow.md` (a reescribir contra Khipu — ARQ-12). Decisiones cerradas: pago = bundle de clases · disparador manual · comisión absorbida por profesor · link público sin login · expiración 7 días.
+> **Prerequisitos:** ARQ-10..13 (bloqueantes), ARQ-14..17 (recomendados), VW-01/VW-02 (hosting del link público).
 
 ### Infraestructura
 
@@ -186,12 +205,12 @@
 |---|---|---|---|
 | PF-01 | Cuenta comercial Flow configurada (sandbox + producción) | ⬜ | pagos-flow.md |
 | PF-02 | Migración Supabase: tablas `pagos`, `pagos_clases` + RLS + índices | ⬜ | pagos-flow.md § Modelo de datos |
-| PF-03 | Edge Function `crear-pago`: valida clases, llama Flow `/payment/create`, inserta `pagos` + `pagos_clases` | ⬜ | pagos-flow.md § Criterios — modal |
+| PF-03 | Edge Function `crear-pago`: valida clases, **calcula el monto server-side leyendo la DB** (nunca acepta el total del cliente), llama a la pasarela, inserta `pagos` + `pagos_clases` | ⬜ | pagos-flow.md § Criterios — modal |
 | PF-04 | Edge Function `webhook-flow`: valida firma, confirma via `getStatus`, transiciona a `pagado` (idempotente) | ⬜ | pagos-flow.md § Webhook |
 | PF-05 | Edge Function `anular-pago`: cancela en Flow si es posible, transiciona local a `anulado` | ⬜ | pagos-flow.md § Gestión |
 | PF-06 | Edge Function `reembolsar-pago`: llama Flow `/payment/refund`, transiciona a `reembolsado`, revierte `clases.pagada` | ⬜ | pagos-flow.md § Gestión |
 | PF-07 | Expiración perezosa: vista SQL o lógica en queries que transiciona `pendiente` → `expirado` cuando vence | ⬜ | pagos-flow.md § Expiración |
-| PF-08 | Mutadores en `AlumnosContext`: `crearPago`, `anularPago`, `reembolsarPago`, getters de `pagos` | ⬜ | pagos-flow.md |
+| PF-08 | Contexto **nuevo y separado** `PagosContext`: `crearPago`, `anularPago`, `reembolsarPago`, getters de `pagos` (no engordar `AlumnosContext`, ya es un god object de ~590 líneas) | ⬜ | pagos-flow.md |
 
 ### UI Profesor
 
@@ -222,4 +241,4 @@
 | PF-21 | Eliminar UI del toggle pagada en Finanzas y Perfil (cierra AL-18) | ⬜ | finanzas.md + alumnos.md |
 | PF-22 | Eliminar mutador `togglePagadaClase` del contexto | ⬜ | alumnos.md |
 | PF-23 | Manejo de borrado de clase incluida en pago: CASCADE en `pagos_clases`; si el pago queda sin clases → auto `anulado` | ⬜ | pagos-flow.md § Casos borde |
-| PF-24 | Notificación push al profesor al confirmar pago | ⬜ | pagos-flow.md § Webhook |
+| PF-24 | Notificación push al profesor al confirmar pago | 🚫 | pagos-flow.md § Webhook — **bloqueada por decisión de alcance (ARQ-12):** la app solo tiene notificaciones locales; push server→dispositivo requiere registrar Expo Push Tokens + envío desde la Edge Function. Decidir si entra en v1 o el profesor se entera al abrir la app |

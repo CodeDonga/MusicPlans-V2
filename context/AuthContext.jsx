@@ -3,6 +3,7 @@ import * as Linking from 'expo-linking'
 import * as WebBrowser from 'expo-web-browser'
 import Constants from 'expo-constants'
 import { supabase } from '../lib/supabase'
+import { logWarn } from '../lib/log'
 
 const OAUTH_REDIRECT = `${Constants.expoConfig?.scheme ?? 'musicplans'}://`
 
@@ -146,7 +147,13 @@ export function AuthProvider({ children }) {
     const userId = sesionActual?.user?.id
     if (googleRefreshToken && userId) {
       await supabase.from('google_tokens').delete().eq('user_id', userId)
-      await supabase.from('google_tokens').insert({ user_id: userId, refresh_token: googleRefreshToken })
+      const { error: tokenError } = await supabase
+        .from('google_tokens')
+        .insert({ user_id: userId, refresh_token: googleRefreshToken })
+      // BUG-30: si el refresh token no se persiste, la conexión solo dura ~55 min
+      if (tokenError) logWarn('gcal', 'no se pudo guardar el refresh token', { error: tokenError.message })
+    } else if (!googleRefreshToken) {
+      logWarn('gcal', 'Google no devolvió provider_refresh_token — el refresh automático no funcionará')
     }
     await supabase.auth.updateUser({ data: { google_calendar_connected: true } })
     setSession(prev => prev ? {
@@ -183,7 +190,7 @@ export function AuthProvider({ children }) {
       try { codigo = (await error?.context?.json())?.error ?? null } catch {}
       // revoked: el usuario quitó el acceso desde Google; no_token: no hay refresh
       // token guardado (conexión previa a GC-05) — en ambos casos hay que reconectar
-      if (__DEV__) console.warn('[gcal] calendar-token sin access token:', codigo ?? error?.message ?? 'sin detalle')
+      logWarn('gcal', 'calendar-token sin access token', { codigo: codigo ?? error?.message ?? 'sin detalle' })
       if (codigo === 'revoked' || codigo === 'no_token') await desconectarCalendar()
       return null
     }

@@ -5,6 +5,7 @@ import { useAuth } from './AuthContext';
 import { parseFecha } from '../lib/fechas';
 import { programarNotificacion, cancelarNotificacion } from '../lib/notificaciones';
 import { crearEvento, editarEvento, eliminarEvento } from '../lib/googleCalendar';
+import { logWarn } from '../lib/log';
 
 const AlumnosContext = createContext(null);
 
@@ -15,6 +16,9 @@ export function AlumnosProvider({ children }) {
   const [clases, setClases] = useState({});
   const [pagosHistoricos, setPagosHistoricos] = useState([]);
   const userIdRef = useRef(null);
+  // ARQ-15: contador de mutaciones en vuelo. El listener de AppState no recarga
+  // mientras haya una operación activa, para no pisar estado optimista (familia BUG-29).
+  const mutacionesEnCurso = useRef(0);
 
   useEffect(() => {
     const userId = session?.user?.id ?? null;
@@ -32,7 +36,7 @@ export function AlumnosProvider({ children }) {
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', nextState => {
-      if (nextState === 'active' && userIdRef.current) cargarDatos();
+      if (nextState === 'active' && userIdRef.current && mutacionesEnCurso.current === 0) cargarDatos();
     });
     return () => sub.remove();
   }, []);
@@ -162,6 +166,7 @@ export function AlumnosProvider({ children }) {
     catch (e) {
       // GC-05: se invalida el caché y la próxima operación refresca sola
       if (e.message === 'TOKEN_EXPIRADO') clearProviderToken();
+      else logWarn('gcal', 'operación de Calendar falló', { error: e?.message });
       return null;
     }
   }
@@ -187,7 +192,7 @@ export function AlumnosProvider({ children }) {
       .from('clases')
       .update({ google_event_id: googleEventId })
       .eq('id', claseId);
-    if (error && __DEV__) console.warn('[gcal] no se pudo persistir google_event_id:', error.message);
+    if (error) logWarn('gcal', 'no se pudo persistir google_event_id', { error: error.message, claseId });
     return !error;
   }
 
@@ -220,6 +225,16 @@ export function AlumnosProvider({ children }) {
       .eq('entidad_id', entidadId);
     const eventos = new Map((data || []).map(f => [f.id, f.google_event_id]));
     return clasesLocales.map(c => ({ ...c, googleEventId: eventos.get(c.id) ?? c.googleEventId }));
+  }
+
+  // ARQ-16: borra las clases no pagadas de una entidad chequeando el error.
+  // Devuelve false si algún delete falló (el caller aborta para no dejar huérfanas).
+  async function borrarClasesNoPagadas(entidadId) {
+    const { error: e1 } = await supabase.from('clases').delete().eq('entidad_id', entidadId).eq('pagada', false);
+    const { error: e2 } = await supabase.from('clases').delete().eq('entidad_id', entidadId).is('pagada', null);
+    const error = e1 || e2;
+    if (error) logWarn('db', 'no se pudieron borrar clases no pagadas', { error: error.message, entidadId });
+    return !error;
   }
 
   async function limpiarClasesBorradas(clasesBorradas) {
@@ -267,8 +282,7 @@ export function AlumnosProvider({ children }) {
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
     const clasesBorradas = await conEventosDeDB((clases[id] || []).filter(c => !c.pagada), id);
 
-    await supabase.from('clases').delete().eq('entidad_id', id).eq('pagada', false);
-    await supabase.from('clases').delete().eq('entidad_id', id).is('pagada', null);
+    if (!(await borrarClasesNoPagadas(id))) { cargarDatos(); return; }
     const { error } = await supabase.from('alumnos').delete().eq('id', id);
     if (error) { cargarDatos(); return; }
 
@@ -320,8 +334,7 @@ export function AlumnosProvider({ children }) {
     const clasesBorradas = await conEventosDeDB((clases[id] || []).filter(c => !c.pagada), id);
     const valorUnitario = (entidad?.valorPorAlumno || 0) * (entidad?.participantes?.length || 1);
 
-    await supabase.from('clases').delete().eq('entidad_id', id).eq('pagada', false);
-    await supabase.from('clases').delete().eq('entidad_id', id).is('pagada', null);
+    if (!(await borrarClasesNoPagadas(id))) { cargarDatos(); return; }
     const { error } = await supabase.from('talleres').delete().eq('id', id);
     if (error) { cargarDatos(); return; }
 
@@ -460,7 +473,7 @@ export function AlumnosProvider({ children }) {
     if (googleEventId) {
       const token = await getGoogleToken();
       if (token) await safeGCal(() => eliminarEvento(token, googleEventId));
-      else if (__DEV__) console.warn('[gcal] sin token para eliminar evento de clase', claseId);
+      else logWarn('gcal', 'sin token para eliminar evento de clase', { claseId });
     }
     setClases(prev => ({
       ...prev,
@@ -578,13 +591,30 @@ export function AlumnosProvider({ children }) {
     return actualizaciones.length;
   }
 
+  // ARQ-15: envuelve un mutador para contabilizarlo como operación en vuelo.
+  function conGuard(fn) {
+    return async (...args) => {
+      mutacionesEnCurso.current++;
+      try { return await fn(...args); }
+      finally { mutacionesEnCurso.current--; }
+    };
+  }
+
   return (
     <AlumnosContext.Provider value={{
       alumnos, talleres, clases, pagosHistoricos,
-      agregarAlumno, editarAlumno, eliminarAlumno,
-      agregarTaller, editarTaller, eliminarTaller,
-      agregarClase, editarClase, eliminarClase, cambiarEstadoClase, togglePagadaClase,
-      sincronizarClasesExistentes,
+      agregarAlumno: conGuard(agregarAlumno),
+      editarAlumno: conGuard(editarAlumno),
+      eliminarAlumno: conGuard(eliminarAlumno),
+      agregarTaller: conGuard(agregarTaller),
+      editarTaller: conGuard(editarTaller),
+      eliminarTaller: conGuard(eliminarTaller),
+      agregarClase: conGuard(agregarClase),
+      editarClase: conGuard(editarClase),
+      eliminarClase: conGuard(eliminarClase),
+      cambiarEstadoClase: conGuard(cambiarEstadoClase),
+      togglePagadaClase: conGuard(togglePagadaClase),
+      sincronizarClasesExistentes: conGuard(sincronizarClasesExistentes),
     }}>
       {children}
     </AlumnosContext.Provider>

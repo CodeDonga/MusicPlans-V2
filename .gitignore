@@ -49,3 +49,6 @@ build_log.txt
 
 # config local de Claude Code
 .claude/settings.local.json
+
+# dumps de auditoría de esquema (ARQ-10): reproducibles vía scripts/arq10-dump.ps1
+scripts/arq10/
