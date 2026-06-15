@@ -16,9 +16,11 @@
 ### Conexión
 - [ ] El profesor puede conectar su Google Calendar desde la pantalla Ajustes.
 - [ ] La conexión solicita el scope `calendar.events` con `access_type: offline`.
+- [ ] **Mínima fricción (GC-08):** "Conectar" primero **verifica** si ya hay un refresh token utilizable (`getCalendarAccessToken`); si lo hay, queda conectado **sin abrir Google** (ni selector de cuenta ni consent). Solo si no hay token válido se abre el flujo OAuth, con `login_hint` = email del usuario (preselecciona la cuenta) y **sin** `prompt: consent` (Google lo pide solo si el scope es nuevo).
+- [ ] **Login con Google** no fuerza `prompt: select_account`: reutiliza la sesión existente. La sesión de Supabase se persiste (`persistSession`), así que el login es de una sola vez.
 - [ ] **El access token de Google nunca se persiste en el cliente** (BUG-07/BUG-21): vive solo en un ref en memoria de `AuthContext` (BUG-28). En `user_metadata` se guarda únicamente el flag `google_calendar_connected`.
 - [ ] **Refresh automático (GC-05):** al conectar, el `provider_refresh_token` se guarda en la tabla `google_tokens` (server-side). Cuando el access token en memoria falta o está por vencer, el cliente invoca la Edge Function `calendar-token`, que canjea el refresh token con Google y devuelve un access token fresco. El usuario conecta Calendar **una sola vez**; no necesita reconectar tras 1 hora ni al reiniciar la app.
-- [ ] Al desconectar Calendar se elimina la fila de `google_tokens` y se limpia el ref en memoria.
+- [ ] Al desconectar Calendar se limpia el flag `google_calendar_connected` y el ref en memoria. **La fila de `google_tokens` se conserva a propósito** (GC-08) para que reconectar sea instantáneo; para revocar de verdad, el usuario quita el acceso desde su cuenta de Google. Si el refresh token quedara inválido, la Edge Function lo borra sola (`revoked`).
 - [ ] Si no hay token disponible → las funciones de calendario fallan silenciosamente (sin error visible al usuario).
 - [ ] Si Google responde 401 (token vencido) → se lanza `TOKEN_EXPIRADO` y se invalida el caché en memoria; la siguiente operación obtiene un token fresco automáticamente (GC-05). Sin Alert: ya no se requiere acción del usuario.
 - [ ] Si el refresh falla porque el usuario revocó el acceso (`revoked`) o no hay refresh token guardado (`no_token`) → se limpia el flag `google_calendar_connected` y Ajustes vuelve a mostrar "conectar".

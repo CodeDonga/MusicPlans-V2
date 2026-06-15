@@ -97,9 +97,11 @@ export function AuthProvider({ children }) {
 
   async function signInWithGoogle() {
     const redirectUrl = OAUTH_REDIRECT
+    // Sin prompt forzado: Google reutiliza la sesión existente y evita el selector
+    // de cuenta cuando ya hay una. La sesión de Supabase se persiste (una vez basta).
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: redirectUrl, skipBrowserRedirect: true, queryParams: { prompt: 'select_account' } },
+      options: { redirectTo: redirectUrl, skipBrowserRedirect: true },
     })
     if (error) throw error
     const result = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl)
@@ -117,15 +119,35 @@ export function AuthProvider({ children }) {
     await supabase.auth.exchangeCodeForSession(result.url)
   }
 
+  // Refleja el flag google_calendar_connected en user_metadata + sesión en memoria.
+  async function setCalendarFlag(valor) {
+    await supabase.auth.updateUser({ data: { google_calendar_connected: valor } })
+    setSession(prev => prev ? {
+      ...prev,
+      user: { ...prev.user, user_metadata: { ...prev.user.user_metadata, google_calendar_connected: valor } }
+    } : prev)
+  }
+
   async function conectarCalendar() {
+    // 1) Si ya hay un refresh token guardado y válido, reconectar es instantáneo:
+    // no hace falta volver a pasar por Google (evita selector de cuenta + consent).
+    const tokenGuardado = await getCalendarAccessToken()
+    if (tokenGuardado) {
+      await setCalendarFlag(true)
+      return true
+    }
+    // 2) Si no hay token utilizable, autorizar con Google. login_hint preselecciona
+    // la cuenta del usuario (salta el selector); sin prompt:consent salvo que Google
+    // lo exija por ser un scope nuevo. access_type:offline para recibir refresh token.
     const redirectUrl = OAUTH_REDIRECT
+    const email = session?.user?.email
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
         redirectTo: redirectUrl,
         skipBrowserRedirect: true,
         scopes: 'https://www.googleapis.com/auth/calendar.events',
-        queryParams: { access_type: 'offline', prompt: 'consent' },
+        queryParams: { access_type: 'offline', ...(email ? { login_hint: email } : {}) },
       },
     })
     if (error) throw error
@@ -168,25 +190,17 @@ export function AuthProvider({ children }) {
     } else if (!googleRefreshToken) {
       logWarn('gcal', 'Google no devolvió provider_refresh_token — el refresh automático no funcionará')
     }
-    await supabase.auth.updateUser({ data: { google_calendar_connected: true } })
-    setSession(prev => prev ? {
-      ...prev,
-      user: { ...prev.user, user_metadata: { ...prev.user.user_metadata, google_calendar_connected: true } }
-    } : prev)
+    await setCalendarFlag(true)
     return true
   }
 
   async function desconectarCalendar() {
     providerTokenRef.current = null
-    const { data: { session: sesionActual } } = await supabase.auth.getSession()
-    if (sesionActual?.user?.id) {
-      await supabase.from('google_tokens').delete().eq('user_id', sesionActual.user.id)
-    }
-    await supabase.auth.updateUser({ data: { google_calendar_connected: null } })
-    setSession(prev => prev ? {
-      ...prev,
-      user: { ...prev.user, user_metadata: { ...prev.user.user_metadata, google_calendar_connected: null } }
-    } : prev)
+    // Se conserva la fila de google_tokens a propósito: así reconectar es instantáneo
+    // (conectarCalendar reutiliza el refresh token guardado sin volver a pasar por
+    // Google). Para revocar de verdad el acceso, el usuario lo quita desde su cuenta
+    // de Google. Si el token fuera inválido, la Edge Function lo borra sola (revoked).
+    await setCalendarFlag(null)
   }
 
   function getCalendarToken() {

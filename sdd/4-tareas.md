@@ -185,6 +185,7 @@
 | GC-04 | Eliminar evento al cancelar/eliminar clase | ✅ | google-calendar.md |
 | GC-05 | Refresh automático del token vía Edge Function | ✅ | google-calendar.md § Refresh automático — tabla `google_tokens` (RLS sin SELECT) + función `calendar-token` + cliente con caché en memoria. Desplegado y verificado en dispositivo el 2026-06-11: las clases sincronizan tras cerrar/reabrir la app sin reconectar |
 | GC-06 | Detección de conflictos de horario | ✅ | google-calendar.md — detección local en `perfil.jsx:buscarConflicto`: solapamiento de ventanas de 60 min entre clases no canceladas, Alert "¿Guardar igual?" al crear y al editar. freeBusy de Google queda como mejora futura |
+| GC-08 | Conectar/loguear con mínima fricción (sin elegir cuenta ni aceptar cada vez) | ✅ | Pedido del usuario 2026-06-15: cansaba el "elegir cuenta → continuar → aceptar". Fix en `AuthContext`: (1) `conectarCalendar` **verifica primero** un refresh token utilizable (`getCalendarAccessToken`) y si existe queda conectado **sin abrir Google**; (2) cuando sí abre OAuth, usa `login_hint`=email (salta el selector) y **sin** `prompt:consent`; (3) `signInWithGoogle` sin `prompt:select_account`; (4) `desconectarCalendar` **conserva** la fila `google_tokens` (solo limpia flag + ref) para que reconectar sea instantáneo — revocar real se hace desde la cuenta de Google. La sesión de Supabase ya se persiste (login de una vez). |
 
 ---
 
