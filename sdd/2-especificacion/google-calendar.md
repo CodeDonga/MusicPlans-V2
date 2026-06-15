@@ -1,112 +1,155 @@
 # Especificación — Google Calendar
-> Módulo: `lib/googleCalendar.js`, `context/AuthContext.jsx` (conectarCalendar, getCalendarToken)
+
+> Estado: **spec reconstruida 2026-06-15** (reemplaza la versión anterior, que
+> había quedado parchada con referencias a bugs sueltos). Nivel SDD:
+> spec-anchored — el código se audita contra este documento.
+>
+> Módulos involucrados: `lib/googleCalendar.js`, `context/AuthContext.jsx`,
+> `context/AlumnosContext.jsx`, `app/(tabs)/ajustes.jsx`, y la Edge Function
+> `supabase/functions/calendar-token`.
 
 ---
 
-## Historia de usuario
+## 1. Historia de usuario
 
-**Como** profesor de música,  
-**quiero** que mis clases se sincronicen automáticamente con Google Calendar,  
-**para** tener toda mi agenda en un solo lugar.
-
----
-
-## Criterios de aceptación
-
-### Conexión
-- [ ] El profesor puede conectar su Google Calendar desde la pantalla Ajustes.
-- [ ] La conexión solicita el scope `calendar.events` con `access_type: offline`.
-- [ ] **Mínima fricción (GC-08):** "Conectar" primero **verifica** si ya hay un refresh token utilizable (`getCalendarAccessToken`); si lo hay, queda conectado **sin abrir Google** (ni selector de cuenta ni consent). Solo si no hay token válido se abre el flujo OAuth, con `login_hint` = email del usuario (preselecciona la cuenta) y **sin** `prompt: consent` (Google lo pide solo si el scope es nuevo).
-- [ ] **Login con Google** no fuerza `prompt: select_account`: reutiliza la sesión existente. La sesión de Supabase se persiste (`persistSession`), así que el login es de una sola vez.
-- [ ] **El access token de Google nunca se persiste en el cliente** (BUG-07/BUG-21): vive solo en un ref en memoria de `AuthContext` (BUG-28). En `user_metadata` se guarda únicamente el flag `google_calendar_connected`.
-- [ ] **Refresh automático (GC-05):** al conectar, el `provider_refresh_token` se guarda en la tabla `google_tokens` (server-side). Cuando el access token en memoria falta o está por vencer, el cliente invoca la Edge Function `calendar-token`, que canjea el refresh token con Google y devuelve un access token fresco. El usuario conecta Calendar **una sola vez**; no necesita reconectar tras 1 hora ni al reiniciar la app.
-- [ ] Al desconectar Calendar se limpia el flag `google_calendar_connected` y el ref en memoria. **La fila de `google_tokens` se conserva a propósito** (GC-08) para que reconectar sea instantáneo; para revocar de verdad, el usuario quita el acceso desde su cuenta de Google. Si el refresh token quedara inválido, la Edge Function lo borra sola (`revoked`).
-- [ ] Si no hay token disponible → las funciones de calendario fallan silenciosamente (sin error visible al usuario).
-- [ ] Si Google responde 401 (token vencido) → se lanza `TOKEN_EXPIRADO` y se invalida el caché en memoria; la siguiente operación obtiene un token fresco automáticamente (GC-05). Sin Alert: ya no se requiere acción del usuario.
-- [ ] Si el refresh falla porque el usuario revocó el acceso (`revoked`) o no hay refresh token guardado (`no_token`) → se limpia el flag `google_calendar_connected` y Ajustes vuelve a mostrar "conectar".
-
-### Crear evento
-- [ ] Al crear una clase con estado != `cancelada` → intenta crear un evento en Google Calendar.
-- [ ] El evento incluye: título ("Clase con [nombre]"), fecha, hora, duración por defecto (1 hora).
-- [ ] Si la creación es exitosa → guarda `google_event_id` en la clase en Supabase.
-- [ ] Si falla (token vencido, sin conexión) → la clase se crea igual, sin evento.
-
-### Editar evento
-- [ ] Al editar una clase que tiene `google_event_id` → actualiza el evento en Google Calendar.
-- [ ] Si el estado cambia a `cancelada` → elimina el evento y limpia `google_event_id`.
-- [ ] **Auto-sanación (BUG-33):** si el PATCH responde 404/410 (el usuario borró el evento en Calendar), `editarEvento` devuelve `'gone'` y la app **recrea** el evento y persiste el nuevo id, en vez de asumir que existe.
-
-### Eliminar evento
-- [ ] Al eliminar una clase con `google_event_id` → elimina el evento de Google Calendar.
-- [ ] Al cancelar una clase con `google_event_id` → elimina el evento de Google Calendar.
-- [ ] **Fuente de verdad del id (BUG-29):** antes de eliminar o cancelar, el `google_event_id` se lee desde Supabase — no del estado en memoria, que puede no tener el id (p. ej. si se recargó desde la DB antes de que el id terminara de persistirse). Aplica a: eliminar clase, eliminar alumno/taller (clases no pagadas) y cancelar clase.
-- [ ] `eliminarEvento` informa el resultado: 2xx/404/410 cuentan como éxito (el evento ya no existe en Calendar); cualquier otro status devuelve `false` y se loguea en desarrollo (`__DEV__`).
-- [ ] La persistencia de `google_event_id` tras crear un evento (alta, reactivación, sincronización) verifica el error del UPDATE y lo loguea en desarrollo — antes fallaba en silencio (causa raíz de BUG-29).
-
-### Conflictos de horario (GC-06)
-
-Definición: la detección es **local**, contra las clases de la app (no consulta la API de Google — eso queda como mejora futura vía freeBusy).
-
-- [ ] Un conflicto existe cuando otra clase **no cancelada** (de cualquier alumno/taller) cae en la misma fecha y sus ventanas de 60 minutos se superponen (`|inicioA − inicioB| < 60 min`).
-- [ ] Al guardar una clase nueva con conflicto → Alert "Conflicto de horario: ya tienes una clase con {nombre} a las {hora}hs ese día. ¿Guardar igual?" con botones Cancelar / Guardar igual.
-- [ ] Al editar una clase, la propia clase se excluye de la comparación.
-- [ ] "Guardar igual" guarda la clase normalmente; "Cancelar" mantiene el formulario abierto sin efectos.
-
-### Reactivación (BUG-23)
-- [ ] Al reactivar una clase cancelada (por cambio de estado o edición) sin `google_event_id` → se crea un evento nuevo y se persiste su id.
-
-### Sincronización de clases existentes
-- [ ] `sincronizarClasesExistentes` (al conectar Calendar) procesa **toda** clase no cancelada, **incluidas las pasadas** (BUG-32: debe aparecer todo el historial).
-- [ ] El id se evalúa **solo contra la DB** (fuente de verdad, BUG-29/33), nunca contra el id en memoria.
-- [ ] **Reconciliación (BUG-34):** si la clase ya tiene `google_event_id`, la sincronización **verifica que el evento siga existiendo** (PATCH vía `editarEvento`); si fue borrado en Calendar (`'gone'`), lo **recrea**; si existe, lo actualiza. Si no tiene id, lo crea. Así reconectar repuebla los eventos borrados a mano.
-- [ ] Desconectar Calendar **no** limpia los `google_event_id` (evita duplicados al reconectar si los eventos siguen existiendo).
+**Como** profesor de música,
+**quiero** que mis clases se reflejen automáticamente en mi Google Calendar,
+**para** tener toda mi agenda en un solo lugar sin gestionarla dos veces.
 
 ---
 
-## Refresh automático del token (GC-05)
+## 2. Principios y alcance (decisiones cerradas)
 
-### Modelo de datos
+1. **Una sola dirección: app → Calendar.** La app es la fuente de verdad; Calendar es un reflejo. Editar o borrar algo en Google **no** modifica datos en la app. (Pero la app sí recrea lo que se borró en Calendar — ver §6.)
+2. **Solo entidades existentes.** Se reflejan únicamente las clases de alumnos/talleres que existen hoy en la app. Las clases de entidades eliminadas (que se conservan como historial financiero) **no** van a Calendar.
+3. **Todo el historial.** Se sincronizan las clases pasadas y futuras, mientras no estén canceladas.
+4. **Mínima fricción.** Conectar es de una sola vez; reconectar no debe pedir elegir cuenta ni aceptar permisos (ver §3).
+5. **No bloqueante.** Ninguna operación de Calendar puede hacer fallar la operación principal (crear/editar/borrar clase nunca se rompe por culpa de Calendar).
+6. **Seguridad.** El access token de Google nunca se persiste en el cliente (vive solo en memoria). El refresh token vive server-side y es ilegible desde el cliente.
 
-Tabla `google_tokens` en Supabase:
+---
 
+## 3. Conexión y desconexión
+
+### Conectar (desde Ajustes)
+- [ ] **Verificar primero:** al tocar "Conectar", la app intenta obtener un access token usando el refresh token guardado. Si lo logra, queda **conectada sin abrir Google** (sin selector de cuenta ni consentimiento).
+- [ ] **Si no hay token utilizable**, abre el flujo OAuth con: scope `calendar.events`, `access_type=offline`, `login_hint`=email del usuario (preselecciona la cuenta). **No** se fuerza `prompt=consent` (Google lo muestra solo la primera vez que se otorga el scope).
+- [ ] Al conectar con éxito: se guarda el refresh token (server-side, §4), se marca `google_calendar_connected=true` y se dispara una **sincronización completa** (§5).
+
+### Desconectar
+- [ ] Limpia el flag `google_calendar_connected` y el token en memoria. La app deja de sincronizar.
+- [ ] **Conserva** la fila de `google_tokens` a propósito, para que reconectar sea instantáneo.
+- [ ] Revocar de verdad el acceso se hace desde la cuenta de Google. Si el refresh token quedara inválido (revocado), la Edge Function lo borra sola.
+
+### Login con Google (a la app)
+- [ ] No fuerza selección de cuenta. La sesión de Supabase se persiste (`persistSession`), así que el login es de una sola vez.
+
+---
+
+## 4. Modelo de datos y refresh del token
+
+### Tabla `google_tokens`
 | Columna | Tipo | Notas |
 |---|---|---|
-| `user_id` | uuid PK | FK a `auth.users(id)` con `ON DELETE CASCADE` |
+| `user_id` | uuid PK | FK a `auth.users(id)` ON DELETE CASCADE |
 | `refresh_token` | text | refresh token de Google (larga vida) |
 | `updated_at` | timestamptz | default `now()` |
 
-**RLS (clave de seguridad):** el cliente puede INSERT/UPDATE/DELETE su propia fila, pero **no tiene policy de SELECT** — el refresh token nunca es legible desde la app. Solo la Edge Function (service role) lo lee.
+- **RLS:** el cliente puede INSERT/UPDATE/DELETE su propia fila, pero **no hay policy de SELECT** → el refresh token nunca es legible desde la app (un `select` como `authenticated` devuelve 0 filas).
+- **Grant:** `authenticated` tiene `SELECT` a nivel de tabla (lo exige el upsert `ON CONFLICT`), pero RLS lo neutraliza para lectura. El refresh token sigue protegido.
+- **Escritura del token:** `conectarCalendar` hace **`upsert`** idempotente (`onConflict: user_id`). Nunca delete+insert.
 
-### Edge Function `calendar-token`
+### `clases.google_event_id`
+- Guarda el id del evento de Google para esa clase. `null` = sin evento.
+- **Fuente de verdad del id: la DB**, no el estado en memoria (que puede tener un id viejo).
 
-1. Valida el JWT del usuario (header `Authorization`).
-2. Lee `refresh_token` de `google_tokens` con service role. Sin fila → 404 `no_token`.
-3. POST a `https://oauth2.googleapis.com/token` con `client_id`, `client_secret` (secrets de la función), `refresh_token`, `grant_type=refresh_token`.
-4. OK → responde `{ access_token, expires_in }`.
-5. `invalid_grant` (usuario revocó acceso) → borra la fila y responde 410 `revoked`.
-6. Otro error de Google → 502.
+### Edge Function `calendar-token` (refresh, GC-05)
+1. Valida el JWT del usuario.
+2. Lee `refresh_token` de `google_tokens` con service role. Sin fila -> 404 `no_token`.
+3. POST a `https://oauth2.googleapis.com/token` con `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (secrets de la función) + el refresh token. **Estos secrets deben ser exactamente el mismo cliente OAuth que usa Supabase Auth para Google** (si no, Google responde `invalid_client` y nada sincroniza — fue la causa raíz de BUG-31).
+4. OK -> `{ access_token, expires_in }`.
+5. `invalid_grant` -> borra la fila y responde 410 `revoked`.
 
-Secrets requeridos: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (los mismos del provider Google en Supabase Auth).
-
-### Flujo del cliente
-
-- `conectarCalendar` captura `provider_refresh_token` (hash o `exchangeCodeForSession`) y lo upsertea en `google_tokens`. El access token inicial queda en memoria con su expiración (~55 min).
-- `getCalendarAccessToken()` (AuthContext, async): si el token en memoria vence en >60s lo devuelve; si no, invoca `calendar-token` y cachea el nuevo. Si la función responde `revoked`/`no_token` → limpia el flag `google_calendar_connected` y devuelve null.
-- `getGoogleToken()` de `AlumnosContext` delega en `getCalendarAccessToken()`.
-- `TOKEN_EXPIRADO` (401 de la API de Calendar) invalida el caché en memoria para forzar refresh en la siguiente operación.
-
----
-
-## Restricciones técnicas
-
-- API directa de Google Calendar REST (no SDK).
-- El token se obtiene con `getGoogleToken()` de `AlumnosContext`, que delega en `getCalendarAccessToken()` de `AuthContext` (caché en memoria + refresh vía Edge Function).
-- Fallos de Google Calendar nunca bloquean la operación principal (crear/editar/eliminar clase).
-- `google_event_id` en Supabase se limpia a `null` cuando el evento es eliminado de Calendar.
+### Cliente
+- `getCalendarAccessToken()` (AuthContext): si el token en memoria vence en >60s lo devuelve; si no, invoca `calendar-token` y cachea el nuevo. Si responde `revoked`/`no_token` -> limpia el flag y devuelve null.
+- `TOKEN_EXPIRADO` (401 de la API) invalida el caché en memoria; la próxima operación refresca sola.
 
 ---
 
-## Estado actual
+## 5. Sincronización
 
-- **Implementado:** `crearEvento`, `editarEvento`, `eliminarEvento`, aviso de token vencido (`TOKEN_EXPIRADO` + Alert), recreación de evento al reactivar, detección local de conflictos (GC-06), refresh automático del token vía Edge Function `calendar-token` (GC-05).
-- **Despliegue GC-05:** requiere pasos manuales una vez — `supabase link`, `db push`, `secrets set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET`, `functions deploy calendar-token`.
+### Cuándo corre
+- [ ] Al **conectar** Calendar.
+- [ ] **Automáticamente al abrir la app** (y al volver a foreground) si Calendar está conectado.
+- [ ] Con un botón **"Sincronizar ahora"** en Ajustes, que informa el resultado (p. ej. "7 clases sincronizadas").
+- [ ] Además, cada operación individual sobre una clase actualiza su evento en el momento (§6).
+
+### Qué hace (reconciliación)
+Recorre las clases de los alumnos/talleres **existentes**. Para cada una:
+- [ ] Estado **cancelada** -> no debe haber evento: si lo hay, se elimina y se limpia el id.
+- [ ] Estado **pendiente / realizada / reagendada** -> debe haber un evento al día:
+  - sin evento -> se **crea** y se guarda el id.
+  - con evento que **ya no existe** en Calendar (borrado a mano) -> se **recrea**.
+  - con evento existente -> se **actualiza** su contenido (fecha/hora/título/descripción).
+- [ ] **Robustez:** cada evento se etiqueta con el id de la clase en `extendedProperties.private.mp_clase_id`. La reconciliación se hace por esa etiqueta (listando los eventos de la app una sola vez con `events.list`), de modo que la sincronización se autocorrige aunque el `google_event_id` guardado se haya perdido o desincronizado.
+- [ ] Eficiencia: una llamada `events.list` por sincronización + solo las escrituras necesarias (crear/actualizar/borrar). No se hace una llamada por clase a ciegas.
+
+---
+
+## 6. Ciclo de vida del evento según el estado de la clase
+
+| Acción en la app | Estado resultante | Efecto en Calendar |
+|---|---|---|
+| Crear clase | pendiente / realizada | Se **crea** el evento |
+| Marcar pagada | realizada | El evento se **mantiene** |
+| Marcar no pagada | pendiente | El evento se **mantiene** |
+| Reagendar (cambia fecha/hora) | reagendada | El evento se **actualiza** (nueva fecha/hora) |
+| Editar (planificación/tarea/valor) | sin cambio | El evento se **actualiza** |
+| Cancelar clase | cancelada | El evento se **elimina** y se limpia el id |
+| Reactivar una clase cancelada | pendiente / realizada | El evento se **recrea** |
+| Borrar clase | — | El evento se **elimina** |
+| Borrar el evento a mano en Calendar | (cualquiera no cancelada) | La próxima sincronización lo **recrea** (el dato persiste en la app) |
+| Eliminar alumno/taller | — | Se eliminan **todos** sus eventos, incluidos los de clases pagadas que se conservan como historial financiero |
+
+---
+
+## 7. Mapeo clase -> evento
+
+- **Título:** `🎵 Clase: {nombre del alumno o taller}` (el nombre se toma de la entidad vigente).
+- **Descripción:** planificación (`📋 Planificación:`) y tarea (`✅ Tarea:`) si existen.
+- **Inicio:** fecha + hora de la clase, en la zona horaria local del dispositivo.
+- **Duración:** 1 hora.
+- **Etiqueta:** `extendedProperties.private.mp_clase_id = {id de la clase}`.
+
+---
+
+## 8. Casos borde
+
+| Caso | Comportamiento |
+|---|---|
+| Sin token / sin conexión al crear una clase | La clase se crea igual; el evento se crea en la próxima sincronización. |
+| Token vencido a mitad de una sincronización | Se refresca y se continúa; no se aborta el resto. |
+| Evento borrado a mano en Calendar | Se recrea en la próxima sincronización (clase no cancelada). |
+| Clase de un alumno eliminado | No se sincroniza (no tiene entidad vigente). |
+| Reconexión tras desconectar | Instantánea: reutiliza el refresh token guardado, sin pasar por Google. |
+| `invalid_client` al refrescar | Falla de configuración de secrets de la Edge Function, no de la app (ver §4). |
+
+---
+
+## 9. Restricciones técnicas
+
+- API REST de Google Calendar directa (sin SDK).
+- Calendario `primary` del usuario.
+- Scope `calendar.events` (permite crear/leer/editar/borrar eventos y `events.list`; no permite listar calendarios, lo cual no se necesita).
+- Fallos de Calendar nunca bloquean la operación principal; se loguean (en dev a consola; en prod a `error_logs`).
+- `google_event_id` se limpia a `null` cuando el evento se elimina.
+
+---
+
+## 10. Estado del código vs. esta spec (a auditar)
+
+> Esta sección se completa en la auditoría código-spec. Brechas conocidas a verificar:
+> - Sincronización **al abrir la app / foreground** (hoy solo corre al conectar).
+> - Botón **"Sincronizar ahora"** en Ajustes (hoy no existe como acción explícita).
+> - **Etiquetado** de eventos con `mp_clase_id` y reconciliación por etiqueta vía `events.list` (hoy la reconciliación depende del `google_event_id` guardado y hace PATCH por clase).
+> - Confirmar el mapeo de estados de §6 contra `editarClase` / `cambiarEstadoClase` / `togglePagadaClase`.
