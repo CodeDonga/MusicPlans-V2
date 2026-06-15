@@ -148,8 +148,9 @@ Recorre las clases de los alumnos/talleres **existentes**. Para cada una:
 
 ## 10. Estado del código vs. esta spec (a auditar)
 
-> Esta sección se completa en la auditoría código-spec. Brechas conocidas a verificar:
-> - Sincronización **al abrir la app / foreground** (hoy solo corre al conectar).
-> - Botón **"Sincronizar ahora"** en Ajustes (hoy no existe como acción explícita).
-> - **Etiquetado** de eventos con `mp_clase_id` y reconciliación por etiqueta vía `events.list` (hoy la reconciliación depende del `google_event_id` guardado y hace PATCH por clase).
-> - Confirmar el mapeo de estados de §6 contra `editarClase` / `cambiarEstadoClase` / `togglePagadaClase`.
+> **Paso 1 — Consolidación (hecho 2026-06-15).** La lógica de "reflejar una clase en Calendar", antes duplicada en 5 lugares, se unificó en una sola función `reflejarClaseEnCalendar(entidadId, clase, entidad)` (núcleo puro `aplicarEventoDeClase`). La usan `agregarClase`, `editarClase` y `cambiarEstadoClase`. Mapeo de estados §6 verificado contra el código. Manejo de token unificado (`safeGCal`).
+>
+> Brechas que faltan cerrar:
+> - **GC-09:** etiquetar eventos con `mp_clase_id` + reconciliación por `events.list` (hoy `sincronizarClasesExistentes` aún depende del id guardado, hace PATCH por clase y **no borra eventos de clases canceladas**). Esta función todavía no pasó por el Paso 1.
+> - **GC-10:** sincronizar al abrir la app / foreground (hoy solo al conectar).
+> - **GC-11:** botón "Sincronizar ahora" en Ajustes.

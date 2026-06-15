@@ -196,14 +196,44 @@ export function AlumnosProvider({ children }) {
     return !error;
   }
 
-  async function recrearEventoGCal(token, entidadId, clase, entidadNombre) {
-    const googleEventId = await safeGCal(() => crearEvento(token, clase, entidadNombre));
-    if (!googleEventId) return;
-    await persistirEventoId(clase.id, googleEventId);
+  function setEventoIdEnMemoria(entidadId, claseId, googleEventId) {
     setClases(prev => ({
       ...prev,
-      [entidadId]: (prev[entidadId] || []).map(c => c.id === clase.id ? { ...c, googleEventId } : c),
+      [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, googleEventId } : c),
     }));
+  }
+
+  // Núcleo de sincronización de UNA clase con Calendar. Recibe el id actual del
+  // evento (idActual, leído de la DB) y devuelve el id que debe quedar guardado:
+  //   null     → no debe haber evento (cancelada, o no se pudo crear)
+  //   idActual → ya existía y sigue igual
+  //   nuevo    → se creó o recreó
+  // Solo llama a la API (vía safeGCal); no toca DB ni estado.
+  async function aplicarEventoDeClase(token, clase, entidad, idActual) {
+    const nombre = entidad?.nombre || '';
+    if (clase.estado === 'cancelada') {
+      if (idActual) await safeGCal(() => eliminarEvento(token, idActual));
+      return null;
+    }
+    if (idActual) {
+      const r = await safeGCal(() => editarEvento(token, idActual, clase, nombre));
+      if (r !== 'gone') return idActual; // existe (o error transitorio) → no recrear
+    }
+    return (await safeGCal(() => crearEvento(token, clase, nombre))) ?? idActual;
+  }
+
+  // Única vía por la que los mutadores tocan Calendar: lleva el evento de una clase
+  // al estado que dicta su `estado` y persiste el google_event_id resultante en DB
+  // y en memoria. La DB es la fuente de verdad del id (BUG-29).
+  async function reflejarClaseEnCalendar(entidadId, clase, entidad) {
+    const token = await getGoogleToken();
+    if (!token) return;
+    const idActual = await eventoIdDesdeDB(clase.id);
+    const idNuevo = await aplicarEventoDeClase(token, clase, entidad, idActual);
+    if (idNuevo !== idActual) {
+      await persistirEventoId(clase.id, idNuevo);
+      setEventoIdEnMemoria(entidadId, clase.id, idNuevo);
+    }
   }
 
   // BUG-29: el google_event_id se lee siempre de la DB (fuente de verdad) antes de
@@ -397,27 +427,15 @@ export function AlumnosProvider({ children }) {
     }
 
     const claseDB = dbToClase(data);
-
-    if (clase.estado !== 'cancelada') {
-      programarNotificacion(data.id, entidad?.nombre || '', clase.fecha, clase.hora);
-      const token = await getGoogleToken();
-      if (token) {
-        const googleEventId = await safeGCal(() => crearEvento(token, claseDB, entidad?.nombre || ''));
-        if (googleEventId) {
-          await persistirEventoId(data.id, googleEventId);
-          setClases(prev => ({
-            ...prev,
-            [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? { ...claseDB, googleEventId } : c),
-          }));
-          return;
-        }
-      }
-    }
-
     setClases(prev => ({
       ...prev,
       [entidadId]: (prev[entidadId] || []).map(c => c.id === tempId ? claseDB : c),
     }));
+
+    if (clase.estado !== 'cancelada') {
+      programarNotificacion(data.id, entidad?.nombre || '', clase.fecha, clase.hora);
+    }
+    await reflejarClaseEnCalendar(entidadId, claseDB, entidad);
   }
 
   async function editarClase(entidadId, claseActualizada) {
@@ -426,49 +444,21 @@ export function AlumnosProvider({ children }) {
       [entidadId]: (prev[entidadId] || []).map(c => c.id === claseActualizada.id ? claseActualizada : c),
     }));
 
-    const cancelando = claseActualizada.estado === 'cancelada';
-    const eventoIdCancelar = cancelando ? await eventoIdDesdeDB(claseActualizada.id) : null;
-    const dbUpdate = {
+    const { error } = await supabase.from('clases').update({
       fecha: claseActualizada.fecha,
       hora: claseActualizada.hora,
       planificacion: claseActualizada.planificacion,
       tareas: claseActualizada.tareas,
       estado: claseActualizada.estado,
       valor_custom: claseActualizada.valorCustom ?? null,
-    };
-    if (eventoIdCancelar) dbUpdate.google_event_id = null;
-
-    const { error } = await supabase.from('clases').update(dbUpdate).eq('id', claseActualizada.id);
+    }).eq('id', claseActualizada.id);
     if (error) { cargarDatos(); return; }
 
     const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
+    if (claseActualizada.estado === 'cancelada') cancelarNotificacion(claseActualizada.id);
+    else programarNotificacion(claseActualizada.id, entidad?.nombre || '', claseActualizada.fecha, claseActualizada.hora);
 
-    if (cancelando) {
-      cancelarNotificacion(claseActualizada.id);
-      if (eventoIdCancelar) {
-        const token = await getGoogleToken();
-        if (token) await safeGCal(() => eliminarEvento(token, eventoIdCancelar));
-        setClases(prev => ({
-          ...prev,
-          [entidadId]: (prev[entidadId] || []).map(c =>
-            c.id === claseActualizada.id ? { ...c, googleEventId: null } : c
-          ),
-        }));
-      }
-    } else {
-      programarNotificacion(claseActualizada.id, entidad?.nombre || '', claseActualizada.fecha, claseActualizada.hora);
-      const token = await getGoogleToken();
-      if (token) {
-        const eventoId = claseActualizada.googleEventId ?? await eventoIdDesdeDB(claseActualizada.id);
-        if (eventoId) {
-          const resultado = await safeGCal(() => editarEvento(token, eventoId, claseActualizada, entidad?.nombre || ''));
-          // BUG-33: el evento fue borrado en Calendar → recrearlo
-          if (resultado === 'gone') await recrearEventoGCal(token, entidadId, claseActualizada, entidad?.nombre || '');
-        } else {
-          await recrearEventoGCal(token, entidadId, claseActualizada, entidad?.nombre || '');
-        }
-      }
-    }
+    await reflejarClaseEnCalendar(entidadId, claseActualizada, entidad);
   }
 
   async function eliminarClase(entidadId, claseId) {
@@ -494,28 +484,18 @@ export function AlumnosProvider({ children }) {
       ...prev,
       [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, estado } : c),
     }));
-    const eventoIdCancelar = estado === 'cancelada' ? await eventoIdDesdeDB(claseId) : null;
-    const dbUpdate = { estado };
-    if (eventoIdCancelar) dbUpdate.google_event_id = null;
-    const { error } = await supabase.from('clases').update(dbUpdate).eq('id', claseId);
-    if (error) cargarDatos();
-    if (estado === 'cancelada') {
-      cancelarNotificacion(claseId);
-      if (eventoIdCancelar) {
-        const token = await getGoogleToken();
-        if (token) await safeGCal(() => eliminarEvento(token, eventoIdCancelar));
-        setClases(prev => ({
-          ...prev,
-          [entidadId]: (prev[entidadId] || []).map(c => c.id === claseId ? { ...c, googleEventId: null } : c),
-        }));
-      }
-    } else if (estadoPrevio === 'cancelada' && clase) {
-      const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
+    const { error } = await supabase.from('clases').update({ estado }).eq('id', claseId);
+    if (error) { cargarDatos(); return; }
+
+    const entidad = alumnos.find(a => a.id === entidadId) || talleres.find(t => t.id === entidadId);
+    if (estado === 'cancelada') cancelarNotificacion(claseId);
+    else if (estadoPrevio === 'cancelada' && clase) {
       programarNotificacion(claseId, entidad?.nombre || '', clase.fecha, clase.hora);
-      if (!clase.googleEventId && !(await eventoIdDesdeDB(claseId))) {
-        const token = await getGoogleToken();
-        if (token) await recrearEventoGCal(token, entidadId, { ...clase, estado }, entidad?.nombre || '');
-      }
+    }
+    // El evento solo cambia de presencia al cancelar (se borra) o al reactivar una
+    // cancelada (se recrea); el resto de transiciones no afecta el evento.
+    if (clase && (estado === 'cancelada' || estadoPrevio === 'cancelada')) {
+      await reflejarClaseEnCalendar(entidadId, { ...clase, estado }, entidad);
     }
   }
 
