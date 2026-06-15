@@ -556,14 +556,21 @@ export function AlumnosProvider({ children }) {
       if (!entidad) continue;
 
       for (const clase of clasesEntidad) {
-        // BUG-33: la DB es la única fuente de verdad del id (no caer al id en memoria,
-        // que puede ser un id viejo de un evento ya borrado).
-        if (eventosDB.get(clase.id)) continue;
         if (clase.estado === 'cancelada') continue;
         // BUG-32: se sincronizan también las clases pasadas — debe aparecer todo el historial.
         if (!parseFecha(clase.fecha)) continue;
 
+        // BUG-29/33: la DB es la única fuente de verdad del id (no el id en memoria).
+        const idDB = eventosDB.get(clase.id);
+
         try {
+          if (idDB) {
+            // BUG-34: si la clase ya tiene un id, verificar que el evento siga
+            // existiendo en Calendar. editarEvento devuelve 'gone' (404/410) si el
+            // usuario lo borró → se recrea; si existe, se actualiza y se salta.
+            const r = await editarEvento(token, idDB, clase, entidad.nombre);
+            if (r !== 'gone') continue;
+          }
           const googleEventId = await crearEvento(token, clase, entidad.nombre);
           if (googleEventId) {
             await persistirEventoId(clase.id, googleEventId);

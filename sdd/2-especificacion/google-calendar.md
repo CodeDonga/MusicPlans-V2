@@ -54,8 +54,10 @@ Definición: la detección es **local**, contra las clases de la app (no consult
 - [ ] Al reactivar una clase cancelada (por cambio de estado o edición) sin `google_event_id` → se crea un evento nuevo y se persiste su id.
 
 ### Sincronización de clases existentes
-- [ ] `sincronizarClasesExistentes` (al conectar Calendar) crea un evento para **toda** clase no cancelada que no tenga ya un `google_event_id` en la DB, **incluidas las pasadas** (BUG-32: debe aparecer todo el historial).
-- [ ] El id se evalúa **solo contra la DB** (fuente de verdad, BUG-29/33), nunca contra el id en memoria, que puede apuntar a un evento ya borrado.
+- [ ] `sincronizarClasesExistentes` (al conectar Calendar) procesa **toda** clase no cancelada, **incluidas las pasadas** (BUG-32: debe aparecer todo el historial).
+- [ ] El id se evalúa **solo contra la DB** (fuente de verdad, BUG-29/33), nunca contra el id en memoria.
+- [ ] **Reconciliación (BUG-34):** si la clase ya tiene `google_event_id`, la sincronización **verifica que el evento siga existiendo** (PATCH vía `editarEvento`); si fue borrado en Calendar (`'gone'`), lo **recrea**; si existe, lo actualiza. Si no tiene id, lo crea. Así reconectar repuebla los eventos borrados a mano.
+- [ ] Desconectar Calendar **no** limpia los `google_event_id` (evita duplicados al reconectar si los eventos siguen existiendo).
 
 ---
 
