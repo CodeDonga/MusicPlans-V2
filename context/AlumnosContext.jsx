@@ -280,13 +280,16 @@ export function AlumnosProvider({ children }) {
   async function eliminarAlumno(id) {
     const entidad = alumnos.find(a => a.id === id);
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
-    const clasesBorradas = await conEventosDeDB((clases[id] || []).filter(c => !c.pagada), id);
+    // BUG-36: se borran los eventos de Calendar de TODAS las clases (también las
+    // pagadas, que se conservan en la DB como historial financiero): un alumno
+    // eliminado no debe dejar eventos colgados en el calendario.
+    const clasesConEvento = await conEventosDeDB(clases[id] || [], id);
 
     if (!(await borrarClasesNoPagadas(id))) { cargarDatos(); return; }
     const { error } = await supabase.from('alumnos').delete().eq('id', id);
     if (error) { cargarDatos(); return; }
 
-    await limpiarClasesBorradas(clasesBorradas);
+    await limpiarClasesBorradas(clasesConEvento);
 
     setAlumnos(prev => prev.filter(a => a.id !== id));
     setClases(prev => { const n = { ...prev }; delete n[id]; return n; });
@@ -331,14 +334,15 @@ export function AlumnosProvider({ children }) {
   async function eliminarTaller(id) {
     const entidad = talleres.find(t => t.id === id);
     const clasesPagadas = (clases[id] || []).filter(c => c.pagada);
-    const clasesBorradas = await conEventosDeDB((clases[id] || []).filter(c => !c.pagada), id);
+    // BUG-36: ver eliminarAlumno — se limpian los eventos de TODAS las clases.
+    const clasesConEvento = await conEventosDeDB(clases[id] || [], id);
     const valorUnitario = (entidad?.valorPorAlumno || 0) * (entidad?.participantes?.length || 1);
 
     if (!(await borrarClasesNoPagadas(id))) { cargarDatos(); return; }
     const { error } = await supabase.from('talleres').delete().eq('id', id);
     if (error) { cargarDatos(); return; }
 
-    await limpiarClasesBorradas(clasesBorradas);
+    await limpiarClasesBorradas(clasesConEvento);
 
     setTalleres(prev => prev.filter(t => t.id !== id));
     setClases(prev => { const n = { ...prev }; delete n[id]; return n; });
