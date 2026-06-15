@@ -102,6 +102,8 @@ function PerfilContent({ id, tipo }) {
 
   const [dropdownEstadoId, setDropdownEstadoId] = useState(null);
   const [modalCobro, setModalCobro] = useState(false);
+  const [modalParticipante, setModalParticipante] = useState(false);
+  const [participanteCobro, setParticipanteCobro] = useState(null);
   const [seleccionCobro, setSeleccionCobro] = useState(() => new Set());
   const [editValor, setEditValor] = useState(
     String(esTaller ? (entidad?.valorPorAlumno || '') : (entidad?.valorClase || ''))
@@ -335,19 +337,28 @@ function PerfilContent({ id, tipo }) {
   }
 
   // --- Cobro por transferencia (CT) ---
+  const nParticipantes = esTaller ? Math.max(1, entidad.participantes?.length || 1) : 1;
   const valorPorDefecto = esTaller
     ? (entidad.valorPorAlumno || 0) * (entidad.participantes?.length || 1)
     : (entidad.valorClase || 0);
   const montoDeClase = (c) => c.valorCustom ?? (c.valorUnitario || valorPorDefecto);
+  // En taller cada participante paga su parte del total de la clase.
+  const montoCobro = (c) => esTaller ? Math.round(montoDeClase(c) / nParticipantes) : montoDeClase(c);
+  // Destinatario del mensaje: el alumno, o el participante elegido en el taller.
+  const destinatario = esTaller ? participanteCobro : entidad;
   const clasesCobrables = clasesEntidad.filter(c => c.estado === 'realizada' && !c.pagada);
   const totalCobro = clasesCobrables
     .filter(c => seleccionCobro.has(c.id))
-    .reduce((acc, c) => acc + montoDeClase(c), 0);
+    .reduce((acc, c) => acc + montoCobro(c), 0);
 
   function abrirCobro() {
     const abrir = () => {
-      setSeleccionCobro(new Set(clasesCobrables.map(c => c.id)));
-      setModalCobro(true);
+      if (esTaller) {
+        setModalParticipante(true);
+      } else {
+        setSeleccionCobro(new Set(clasesCobrables.map(c => c.id)));
+        setModalCobro(true);
+      }
     };
     const datos = session?.user?.user_metadata?.datos_cobro;
     if (!datos?.numero_cuenta) {
@@ -364,6 +375,20 @@ function PerfilContent({ id, tipo }) {
     abrir();
   }
 
+  function elegirParticipante(p) {
+    // p viene hidratado como {id, nombre}; tomamos el alumno completo por su whatsapp.
+    const alumno = alumnos.find(a => a.id === p.id);
+    setParticipanteCobro(alumno || p);
+    setSeleccionCobro(new Set(clasesCobrables.map(c => c.id)));
+    setModalParticipante(false);
+    setModalCobro(true);
+  }
+
+  function cerrarCobro() {
+    setModalCobro(false);
+    setParticipanteCobro(null);
+  }
+
   function toggleCobro(claseId) {
     setSeleccionCobro(prev => {
       const next = new Set(prev);
@@ -374,10 +399,10 @@ function PerfilContent({ id, tipo }) {
 
   function construirMensajeCobro(seleccionadas) {
     const lineas = seleccionadas
-      .map(c => `• ${c.fecha} — $${montoDeClase(c).toLocaleString('es-CL')}`)
+      .map(c => `• ${c.fecha} — $${montoCobro(c).toLocaleString('es-CL')}`)
       .join('\n');
-    const total = seleccionadas.reduce((acc, c) => acc + montoDeClase(c), 0);
-    let msg = `Hola ${entidad.nombre} 👋 Te dejo el detalle de tus clases de música:\n${lineas}\n*Total: $${total.toLocaleString('es-CL')}*`;
+    const total = seleccionadas.reduce((acc, c) => acc + montoCobro(c), 0);
+    let msg = `Hola ${destinatario.nombre} 👋 Te dejo el detalle de tus clases de música:\n${lineas}\n*Total: $${total.toLocaleString('es-CL')}*`;
     const datos = session?.user?.user_metadata?.datos_cobro;
     if (datos?.numero_cuenta) {
       msg += `\n\nPuedes transferir a:\n${datos.titular} — RUT ${datos.rut}\n${datos.banco}, cuenta ${datos.tipo_cuenta} N° ${datos.numero_cuenta}`;
@@ -389,18 +414,18 @@ function PerfilContent({ id, tipo }) {
 
   function enviarCobro() {
     const seleccionadas = clasesCobrables.filter(c => seleccionCobro.has(c.id));
-    if (seleccionadas.length === 0) return;
+    if (seleccionadas.length === 0 || !destinatario) return;
     const mensaje = construirMensajeCobro(seleccionadas);
-    let num = (entidad.whatsapp || '').replace(/\D/g, '');
+    let num = (destinatario.whatsapp || '').replace(/\D/g, '');
     if (num.length === 9 && num.startsWith('9')) num = '56' + num; // CL sin código país
     if (!num) {
-      Alert.alert('Sin WhatsApp', `${entidad.nombre} no tiene un número de WhatsApp. Agrégalo con "Editar".`);
+      Alert.alert('Sin WhatsApp', `${destinatario.nombre} no tiene un número de WhatsApp. Agrégalo con "Editar".`);
       return;
     }
     const texto = encodeURIComponent(mensaje);
     const appUrl = `whatsapp://send?phone=${num}&text=${texto}`;
     const webUrl = `https://wa.me/${num}?text=${texto}`;
-    setModalCobro(false);
+    cerrarCobro();
     Linking.openURL(appUrl).catch(() =>
       Linking.openURL(webUrl).catch(() =>
         Alert.alert('No se pudo abrir WhatsApp', 'Revisa que WhatsApp esté instalado.')
@@ -446,19 +471,22 @@ function PerfilContent({ id, tipo }) {
               <Text style={s.btnEliminarTexto}>🗑️  Eliminar</Text>
             </TouchableOpacity>
           </View>
-          {!esTaller && (
-            <TouchableOpacity
-              style={[s.btnGenerarCobro, clasesCobrables.length === 0 && s.btnGenerarCobroOff]}
-              onPress={abrirCobro}
-              disabled={clasesCobrables.length === 0}
-              activeOpacity={0.85}
-            >
-              <FontAwesome name="whatsapp" size={17} color={clasesCobrables.length === 0 ? paleta.onSurfaceVariant : '#fff'} />
-              <Text style={[s.btnGenerarCobroTexto, clasesCobrables.length === 0 && { color: paleta.onSurfaceVariant }]}>
-                Generar cobro
-              </Text>
-            </TouchableOpacity>
-          )}
+          {(() => {
+            const cobroOff = clasesCobrables.length === 0 || (esTaller && !entidad.participantes?.length);
+            return (
+              <TouchableOpacity
+                style={[s.btnGenerarCobro, cobroOff && s.btnGenerarCobroOff]}
+                onPress={abrirCobro}
+                disabled={cobroOff}
+                activeOpacity={0.85}
+              >
+                <FontAwesome name="whatsapp" size={17} color={cobroOff ? paleta.onSurfaceVariant : '#fff'} />
+                <Text style={[s.btnGenerarCobroTexto, cobroOff && { color: paleta.onSurfaceVariant }]}>
+                  Generar cobro
+                </Text>
+              </TouchableOpacity>
+            );
+          })()}
         </View>
 
         {/* Registro de clases */}
@@ -774,11 +802,41 @@ function PerfilContent({ id, tipo }) {
         </View>
       </Modal>
 
-      {/* Modal generar cobro */}
-      <Modal visible={modalCobro} animationType="slide" transparent onRequestClose={() => setModalCobro(false)}>
+      {/* Modal selector de participante (taller) */}
+      <Modal visible={modalParticipante} animationType="slide" transparent onRequestClose={() => setModalParticipante(false)}>
         <View style={s.modalFondo}>
           <View style={s.modalContenido}>
-            <Text style={s.modalTitulo}>💸 Cobrar a {entidad.nombre}</Text>
+            <Text style={s.modalTitulo}>💸 ¿A quién cobrar?</Text>
+            <Text style={s.cobroSubtitulo}>Elige un participante del taller</Text>
+            {!entidad.participantes?.length ? (
+              <Text style={s.cobroVacio}>Este taller no tiene participantes.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 340 }} keyboardShouldPersistTaps="handled">
+                {entidad.participantes.map(p => {
+                  const alumno = alumnos.find(a => a.id === p.id);
+                  const sinWsp = !alumno?.whatsapp;
+                  return (
+                    <TouchableOpacity key={p.id} style={s.participanteCobroItem} onPress={() => elegirParticipante(p)} activeOpacity={0.7}>
+                      <Text style={s.cobroFecha}>{p.nombre}</Text>
+                      {sinWsp && <Text style={s.participanteSinWsp}>sin WhatsApp</Text>}
+                      <Text style={s.participanteFlecha}>→</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+            <TouchableOpacity style={s.btnCancelarCobro} onPress={() => setModalParticipante(false)} activeOpacity={0.85}>
+              <Text style={s.btnCancelarCobroTexto}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal generar cobro */}
+      <Modal visible={modalCobro} animationType="slide" transparent onRequestClose={cerrarCobro}>
+        <View style={s.modalFondo}>
+          <View style={s.modalContenido}>
+            <Text style={s.modalTitulo}>💸 Cobrar a {destinatario?.nombre}</Text>
             <Text style={s.cobroSubtitulo}>Selecciona las clases a cobrar</Text>
             {clasesCobrables.length === 0 ? (
               <Text style={s.cobroVacio}>No hay clases realizadas pendientes de cobro.</Text>
@@ -792,7 +850,7 @@ function PerfilContent({ id, tipo }) {
                         {sel && <Text style={s.cobroCheckTexto}>✓</Text>}
                       </View>
                       <Text style={s.cobroFecha}>{c.fecha} · {c.hora}hs</Text>
-                      <Text style={s.cobroMonto}>${montoDeClase(c).toLocaleString('es-CL')}</Text>
+                      <Text style={s.cobroMonto}>${montoCobro(c).toLocaleString('es-CL')}</Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -811,7 +869,7 @@ function PerfilContent({ id, tipo }) {
               <FontAwesome name="whatsapp" size={20} color="#fff" />
               <Text style={s.btnEnviarWspTexto}>Enviar</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={s.btnCancelarCobro} onPress={() => setModalCobro(false)} activeOpacity={0.85}>
+            <TouchableOpacity style={s.btnCancelarCobro} onPress={cerrarCobro} activeOpacity={0.85}>
               <Text style={s.btnCancelarCobroTexto}>Cancelar</Text>
             </TouchableOpacity>
           </View>
@@ -940,6 +998,9 @@ function makeStyles(p) {
     cobroSubtitulo: { color: p.onSurfaceVariant, fontSize: 13, fontFamily: 'Inter_400Regular', textAlign: 'center', marginBottom: 14 },
     cobroVacio: { color: p.onSurfaceVariant, fontSize: 14, fontFamily: 'Inter_400Regular', textAlign: 'center', paddingVertical: 24 },
     cobroItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: p.outlineVariant },
+    participanteCobroItem: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: p.outlineVariant },
+    participanteSinWsp: { color: p.onSurfaceVariant, fontSize: 11, fontFamily: 'Inter_500Medium', fontStyle: 'italic' },
+    participanteFlecha: { color: p.primary, fontSize: 18, fontFamily: 'Inter_700Bold' },
     cobroCheck: { width: 24, height: 24, borderRadius: 7, borderWidth: 2, borderColor: p.outline, alignItems: 'center', justifyContent: 'center' },
     cobroCheckOn: { backgroundColor: p.primary, borderColor: p.primary },
     cobroCheckTexto: { color: '#fff', fontSize: 13, fontFamily: 'Inter_700Bold' },

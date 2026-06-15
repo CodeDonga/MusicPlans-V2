@@ -51,9 +51,20 @@
 ### Profesor — botón "Generar cobro"
 
 - [ ] En el perfil del alumno (`perfil.jsx`), debajo de "Editar" y "Eliminar", un botón **"Generar cobro"** (estilo primario).
-- [ ] El mismo botón en el perfil del taller.
+- [ ] El mismo botón en el perfil del taller (ver "Cobro de taller" abajo).
 - [ ] En Finanzas, cada tarjeta con badge "Pendiente" tiene un atajo al mismo flujo.
-- [ ] **Deshabilitado** si: el profesor no configuró datos de cobro, **o** el alumno no tiene clases `realizada` con `pagada = false`.
+- [ ] **Deshabilitado** si: el profesor no configuró datos de cobro, **o** el alumno no tiene clases `realizada` con `pagada = false` (en taller, además, si no tiene participantes).
+
+### Profesor — cobro de taller (CT-03)
+
+Un taller no tiene un WhatsApp único y cada participante paga **su parte** (`valor_por_alumno`), pero `clases.pagada` marca la clase completa del grupo. Decisión de diseño (2026-06-13): **se cobra a cada participante por separado.**
+
+- [ ] "Generar cobro" en el perfil del taller abre primero un **selector de participante** (lista de `entidad.participantes`, hidratados desde `alumnos` para tomar su `whatsapp`).
+- [ ] Elegido el participante, se abre el modal de selección de clases ya existente, pero:
+  - El monto por clase es **la parte del participante**: `montoDeClase(c) / nº de participantes`, redondeado a entero (CLP). Así la suma de las partes cuadra con el total de la clase, ya sea valor calculado o `valor_custom`.
+  - El mensaje y el envío de WhatsApp van al **participante seleccionado** (su `nombre` y su `whatsapp`), no al taller.
+- [ ] Para cobrar a otro participante, se repite el flujo (un mensaje por participante).
+- [ ] **Limitación v1 conocida:** la confirmación del pago sigue siendo el toggle `pagada`, que es **por clase**, no por participante. Si en una clase del taller pagan unos sí y otros no, el profesor no puede reflejarlo a nivel de participante en v1 (ver caso borde). El registro por participante es una mejora futura (requeriría infraestructura).
 
 ### Profesor — modal de selección de clases
 
@@ -107,6 +118,9 @@
 | Alumno sin WhatsApp cargado | Se arma el texto igual; se abre WhatsApp sin número o se ofrece compartir/copiar. |
 | Profesor cobra dos veces las mismas clases | Posible (no hay estado): es responsabilidad del profesor. El toggle `pagada` evita re-cobrar (las pagadas ya no aparecen en el modal). |
 | El alumno transfiere de menos / no transfiere | Fuera del alcance de la app: el profesor simplemente no marca las clases como pagadas. |
+| Taller: unos participantes pagan y otros no en la misma clase | El toggle `pagada` es por clase, no por participante. En v1 el profesor decide cuándo marca la clase como pagada (criterio propio). El cobro individual por WhatsApp sí es por participante; el estado persistido no. Mejora futura: pago por participante. |
+| Taller sin participantes | Botón "Generar cobro" deshabilitado. |
+| Participante de taller sin WhatsApp | Se arma el texto igual; al enviar se avisa que ese participante no tiene número (mismo comportamiento que alumno). |
 
 ---
 
