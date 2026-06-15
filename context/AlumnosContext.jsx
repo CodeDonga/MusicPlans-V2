@@ -457,7 +457,9 @@ export function AlumnosProvider({ children }) {
       if (token) {
         const eventoId = claseActualizada.googleEventId ?? await eventoIdDesdeDB(claseActualizada.id);
         if (eventoId) {
-          await safeGCal(() => editarEvento(token, eventoId, claseActualizada, entidad?.nombre || ''));
+          const resultado = await safeGCal(() => editarEvento(token, eventoId, claseActualizada, entidad?.nombre || ''));
+          // BUG-33: el evento fue borrado en Calendar → recrearlo
+          if (resultado === 'gone') await recrearEventoGCal(token, entidadId, claseActualizada, entidad?.nombre || '');
         } else {
           await recrearEventoGCal(token, entidadId, claseActualizada, entidad?.nombre || '');
         }
@@ -547,8 +549,6 @@ export function AlumnosProvider({ children }) {
       .eq('user_id', userIdRef.current);
     const eventosDB = new Map((filasDB || []).map(f => [f.id, f.google_event_id]));
 
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
     const actualizaciones = [];
 
     for (const [entidadId, clasesEntidad] of Object.entries(clases)) {
@@ -556,10 +556,12 @@ export function AlumnosProvider({ children }) {
       if (!entidad) continue;
 
       for (const clase of clasesEntidad) {
-        if (eventosDB.get(clase.id) ?? clase.googleEventId) continue;
+        // BUG-33: la DB es la única fuente de verdad del id (no caer al id en memoria,
+        // que puede ser un id viejo de un evento ya borrado).
+        if (eventosDB.get(clase.id)) continue;
         if (clase.estado === 'cancelada') continue;
-        const fechaClase = parseFecha(clase.fecha);
-        if (!fechaClase || fechaClase < hoy) continue;
+        // BUG-32: se sincronizan también las clases pasadas — debe aparecer todo el historial.
+        if (!parseFecha(clase.fecha)) continue;
 
         try {
           const googleEventId = await crearEvento(token, clase, entidad.nombre);

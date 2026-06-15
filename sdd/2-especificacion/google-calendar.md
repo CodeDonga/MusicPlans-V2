@@ -32,6 +32,7 @@
 ### Editar evento
 - [ ] Al editar una clase que tiene `google_event_id` → actualiza el evento en Google Calendar.
 - [ ] Si el estado cambia a `cancelada` → elimina el evento y limpia `google_event_id`.
+- [ ] **Auto-sanación (BUG-33):** si el PATCH responde 404/410 (el usuario borró el evento en Calendar), `editarEvento` devuelve `'gone'` y la app **recrea** el evento y persiste el nuevo id, en vez de asumir que existe.
 
 ### Eliminar evento
 - [ ] Al eliminar una clase con `google_event_id` → elimina el evento de Google Calendar.
@@ -51,6 +52,10 @@ Definición: la detección es **local**, contra las clases de la app (no consult
 
 ### Reactivación (BUG-23)
 - [ ] Al reactivar una clase cancelada (por cambio de estado o edición) sin `google_event_id` → se crea un evento nuevo y se persiste su id.
+
+### Sincronización de clases existentes
+- [ ] `sincronizarClasesExistentes` (al conectar Calendar) crea un evento para **toda** clase no cancelada que no tenga ya un `google_event_id` en la DB, **incluidas las pasadas** (BUG-32: debe aparecer todo el historial).
+- [ ] El id se evalúa **solo contra la DB** (fuente de verdad, BUG-29/33), nunca contra el id en memoria, que puede apuntar a un evento ya borrado.
 
 ---
 
