@@ -154,10 +154,15 @@ export function AuthProvider({ children }) {
     const { data: { session: sesionActual } } = await supabase.auth.getSession()
     const userId = sesionActual?.user?.id
     if (googleRefreshToken && userId) {
-      await supabase.from('google_tokens').delete().eq('user_id', userId)
+      // BUG-35: upsert idempotente (antes era delete+insert, que al reconectar
+      // dejaba una fila previa y el insert fallaba con duplicate key → el nuevo
+      // refresh token no se guardaba). user_id es PK.
       const { error: tokenError } = await supabase
         .from('google_tokens')
-        .insert({ user_id: userId, refresh_token: googleRefreshToken })
+        .upsert(
+          { user_id: userId, refresh_token: googleRefreshToken, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id' }
+        )
       // BUG-30: si el refresh token no se persiste, la conexión solo dura ~55 min
       if (tokenError) logWarn('gcal', 'no se pudo guardar el refresh token', { error: tokenError.message })
     } else if (!googleRefreshToken) {
