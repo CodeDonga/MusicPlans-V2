@@ -76,6 +76,14 @@ export function AuthProvider({ children }) {
     if (error) throw error
   }
 
+  // CT-01: datos bancarios del profesor para el mensaje de cobro. updateUser hace
+  // merge en user_metadata, así que no pisa `nombre`. El listener USER_UPDATED
+  // refresca la sesión en memoria.
+  async function updateDatosCobro(datosCobro) {
+    const { error } = await supabase.auth.updateUser({ data: { datos_cobro: datosCobro } })
+    if (error) throw error
+  }
+
   async function resetPassword(email) {
     const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: OAUTH_REDIRECT })
     if (error) throw error
@@ -206,7 +214,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ session, loading, signIn, signUp, signOut, signInWithGoogle, updatePerfil, conectarCalendar, desconectarCalendar, getCalendarToken, getCalendarAccessToken, clearProviderToken, resetPassword, updatePassword, recuperandoPassword }}>
+    <AuthContext.Provider value={{ session, loading, signIn, signUp, signOut, signInWithGoogle, updatePerfil, updateDatosCobro, conectarCalendar, desconectarCalendar, getCalendarToken, getCalendarAccessToken, clearProviderToken, resetPassword, updatePassword, recuperandoPassword }}>
       {children}
     </AuthContext.Provider>
   )

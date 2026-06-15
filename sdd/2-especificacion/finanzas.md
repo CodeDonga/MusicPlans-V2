@@ -6,8 +6,8 @@
 ## Historia de usuario
 
 **Como** profesor de música,
-**quiero** ver mis ingresos del mes, quién me debe, y gestionar los pagos solicitados,
-**para** saber cuánto gané, quién no ha pagado, y poder generar/anular/reembolsar cobros sin salir de la pantalla.
+**quiero** ver mis ingresos del mes, quién me debe, y generar un cobro,
+**para** saber cuánto gané, quién no ha pagado, y enviar el detalle de cobro sin salir de la pantalla.
 
 ---
 
@@ -15,8 +15,8 @@
 
 ### Resumen del mes
 
-- [ ] Total ingresado: suma de `pagos.monto_total` con `estado = 'pagado'` y `fecha_pago` en el mes visible.
-- [ ] Total pendiente: suma de clases con `estado = 'realizada'`, `pagada = false` (incluye las que están en un pago `pendiente` y las que no).
+- [ ] Total ingresado: suma del valor de las clases con `pagada = true` y fecha en el mes visible. *(v1 sin tabla de pagos; con pasarela pasaría a `pagos.monto_total`.)*
+- [ ] Total pendiente: suma de clases con `estado = 'realizada'`, `pagada = false`.
 - [ ] Cantidad de clases pagadas en el mes.
 - [ ] Cantidad de clases pendientes de pago.
 - [ ] El mes visible es el mes actual por defecto. Opcional: selector de mes.
@@ -28,13 +28,15 @@
 - [ ] Por cada uno: nombre, cantidad de clases del mes, monto pagado, monto pendiente.
 - [ ] Badge visual:
   - **Al día** (verde): no tiene clases pendientes de pago.
-  - **Pendiente** (alerta): tiene clases pendientes sin pago asociado.
-  - **Esperando pago** (warning): tiene un pago en estado `pendiente` (link enviado, sin pagar todavía).
+  - **Pendiente** (alerta): tiene clases `realizada` con `pagada = false`.
+  - ⏸️ *"Esperando pago" (warning): pospuesto — requiere estado persistido de cobro (módulo pasarela).*
 - [ ] Presionar → despliega detalle:
-  - Lista de clases del mes con su estado (`pagada` / `solicitada` / `por cobrar`).
-  - Atajo "Generar pago" (mismo modal que en perfil — ver `pagos-flow.md`). Deshabilitado si no hay clases pagables.
+  - Lista de clases del mes con su estado (`pagada` / `por cobrar`) y el toggle de pagada.
+  - Atajo "Generar cobro" (mismo modal que en perfil — ver `cobro-transferencia.md`). Deshabilitado si no hay clases pagables o faltan datos de cobro.
 
-### Sección "Pagos solicitados"
+### Sección "Pagos solicitados" — ⏸️ POSPUESTO (módulo pasarela)
+
+> No aplica a la v1 de cobro manual: no se persisten cobros, así que no hay pagos que agrupar por estado. Se retoma con la pasarela automática. Lo de abajo es diseño de referencia.
 
 - [ ] Pestaña/sección dedicada que lista los pagos del mes agrupados por estado:
   - **Pendientes** (link activo, no pagado todavía).
@@ -53,29 +55,25 @@
 - [x] Agrupados por nombre de la entidad eliminada.
 - [x] El detalle lista cada clase pagada del mes con su fecha y hora (`DD/MM/YYYY · HH:MMhs`).
 
-### Lo que NO existe más en Finanzas
+### Toggle manual de pagada (v1: se mantiene)
 
-- ❌ **Toggle manual de pagada/no pagada por clase.** El flag `clases.pagada` ya no es editable directamente por el profesor. Es un efecto del estado del pago asociado (ver `pagos-flow.md`). Si el profesor quiere "des-pagar" una clase, debe reembolsar el pago que la cubrió.
-- ❌ Botón "marcar como pagada manualmente" sin pasar por Flow. Si en el futuro se quiere soportar pagos en efectivo, se modelará como un tipo de pago aparte (`metodo_pago = 'efectivo'`) creado por el profesor, no como un toggle.
+> Revisado 2026-06-13: con el **cobro por transferencia manual** (`cobro-transferencia.md`), el toggle `pagada` por clase **se conserva** y es la fuente de verdad del estado de pago. El profesor lo activa al recibir la transferencia. La eliminación del toggle (y `pagada` como efecto de un pago) sólo aplicaría si se implementa la pasarela automática (módulo POSPUESTO).
 
 ---
 
 ## Restricciones técnicas
 
-- Datos consumidos desde `AlumnosContext`: `alumnos`, `talleres`, `clases`, `pagos`, `pagosHistoricos`.
-- `valor_custom` tiene prioridad sobre `valor_unitario` para clases todavía no incluidas en un pago. Para clases ya incluidas en un pago, el monto se lee de `pagos_clases.monto` (snapshot).
+- Datos consumidos desde `AlumnosContext`: `alumnos`, `talleres`, `clases`, `pagosHistoricos`.
+- `valor_custom` tiene prioridad sobre `valor_unitario` para el monto de cada clase.
 - Sin fetch propio a Supabase — consume solo el contexto.
-- Las transiciones de estado de pago (anular, reembolsar) se hacen vía mutadores del contexto que llaman Edge Functions de Supabase. El cliente nunca habla con Flow directamente.
+- v1 sin tabla `pagos` ni Edge Functions de cobro: el estado de pago es el toggle `pagada`.
 
 ---
 
 ## Estado actual
 
-- **Implementado:** pantalla base con resumen mensual y lista de alumnos/talleres. Toggle de pagada por clase (a eliminar — ver migración en `4-tareas.md`).
-- **Pendiente:**
-  - Eliminar toggle manual de pagada y los flujos asociados.
-  - Sección "Pagos solicitados" con los 4 grupos por estado.
-  - Atajo "Generar pago" en cada tarjeta.
-  - Selector de mes.
-  - Histórico de eliminados visible.
-  - Badge "Esperando pago" (estado nuevo derivado de pagos pendientes).
+- **Implementado:** resumen mensual, lista de alumnos/talleres, toggle de pagada por clase (se mantiene), selector de mes (F-04), histórico de eliminados (F-05).
+- **Pendiente (v1):**
+  - Atajo "Generar cobro" en cada tarjeta (CT-06).
+  - Detalle expandible por alumno con toggle + atajo (F-03).
+- **Pospuesto (módulo pasarela):** sección "Pagos solicitados", badge "Esperando pago".

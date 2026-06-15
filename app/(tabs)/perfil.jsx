@@ -1,11 +1,13 @@
 import { useState, useMemo } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, TextInput, Modal, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, StatusBar, ScrollView, TextInput, Modal, Alert, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { FontAwesome } from '@expo/vector-icons';
 import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
 import { useAlumnos } from '../../context/AlumnosContext';
 import { useTema } from '../../context/TemaContext';
+import { useAuth } from '../../context/AuthContext';
 import { parseFecha, isSameDay } from '../../lib/fechas';
 
 const ESTADOS = ['pendiente', 'realizada', 'cancelada', 'reagendada'];
@@ -43,6 +45,7 @@ function PerfilContent({ id, tipo }) {
   const router = useRouter();
   const { alumnos, talleres, clases, editarAlumno, eliminarAlumno, editarTaller, eliminarTaller, agregarClase, editarClase, eliminarClase, cambiarEstadoClase, togglePagadaClase } = useAlumnos();
   const { tema, paleta } = useTema();
+  const { session } = useAuth();
 
   const esTaller = tipo === 'taller';
   const entidad = esTaller
@@ -98,9 +101,12 @@ function PerfilContent({ id, tipo }) {
   const [editEstado, setEditEstado] = useState('pendiente');
 
   const [dropdownEstadoId, setDropdownEstadoId] = useState(null);
+  const [modalCobro, setModalCobro] = useState(false);
+  const [seleccionCobro, setSeleccionCobro] = useState(() => new Set());
   const [editValor, setEditValor] = useState(
     String(esTaller ? (entidad?.valorPorAlumno || '') : (entidad?.valorClase || ''))
   );
+  const [editWhatsapp, setEditWhatsapp] = useState(entidad?.whatsapp || '');
 
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
   const s = useMemo(() => makeStyles(paleta), [paleta]);
@@ -242,6 +248,7 @@ function PerfilContent({ id, tipo }) {
         nombre: editNombre.trim(),
         instrumento: editInstrumento.nombre,
         avatar: editInstrumento.emoji,
+        whatsapp: editWhatsapp.trim(),
         diaSemana: editDia,
         hora: horaStr,
         valorClase: valorInt,
@@ -327,6 +334,80 @@ function PerfilContent({ id, tipo }) {
     return colores[estado] || colores.pendiente;
   }
 
+  // --- Cobro por transferencia (CT) ---
+  const valorPorDefecto = esTaller
+    ? (entidad.valorPorAlumno || 0) * (entidad.participantes?.length || 1)
+    : (entidad.valorClase || 0);
+  const montoDeClase = (c) => c.valorCustom ?? (c.valorUnitario || valorPorDefecto);
+  const clasesCobrables = clasesEntidad.filter(c => c.estado === 'realizada' && !c.pagada);
+  const totalCobro = clasesCobrables
+    .filter(c => seleccionCobro.has(c.id))
+    .reduce((acc, c) => acc + montoDeClase(c), 0);
+
+  function abrirCobro() {
+    const abrir = () => {
+      setSeleccionCobro(new Set(clasesCobrables.map(c => c.id)));
+      setModalCobro(true);
+    };
+    const datos = session?.user?.user_metadata?.datos_cobro;
+    if (!datos?.numero_cuenta) {
+      Alert.alert(
+        'Configura tus datos de cobro',
+        'Agrega tu cuenta bancaria en Ajustes para incluirla en el mensaje.',
+        [
+          { text: 'Generar sin datos', onPress: abrir },
+          { text: 'Ir a Ajustes', onPress: () => router.navigate('/(tabs)/ajustes') },
+        ]
+      );
+      return;
+    }
+    abrir();
+  }
+
+  function toggleCobro(claseId) {
+    setSeleccionCobro(prev => {
+      const next = new Set(prev);
+      next.has(claseId) ? next.delete(claseId) : next.add(claseId);
+      return next;
+    });
+  }
+
+  function construirMensajeCobro(seleccionadas) {
+    const lineas = seleccionadas
+      .map(c => `• ${c.fecha} — $${montoDeClase(c).toLocaleString('es-CL')}`)
+      .join('\n');
+    const total = seleccionadas.reduce((acc, c) => acc + montoDeClase(c), 0);
+    let msg = `Hola ${entidad.nombre} 👋 Te dejo el detalle de tus clases de música:\n${lineas}\n*Total: $${total.toLocaleString('es-CL')}*`;
+    const datos = session?.user?.user_metadata?.datos_cobro;
+    if (datos?.numero_cuenta) {
+      msg += `\n\nPuedes transferir a:\n${datos.titular} — RUT ${datos.rut}\n${datos.banco}, cuenta ${datos.tipo_cuenta} N° ${datos.numero_cuenta}`;
+      if (datos.email) msg += `\n${datos.email}`;
+      msg += `\n\nCuando transfieras, envíame el comprobante 🙌`;
+    }
+    return msg;
+  }
+
+  function enviarCobro() {
+    const seleccionadas = clasesCobrables.filter(c => seleccionCobro.has(c.id));
+    if (seleccionadas.length === 0) return;
+    const mensaje = construirMensajeCobro(seleccionadas);
+    let num = (entidad.whatsapp || '').replace(/\D/g, '');
+    if (num.length === 9 && num.startsWith('9')) num = '56' + num; // CL sin código país
+    if (!num) {
+      Alert.alert('Sin WhatsApp', `${entidad.nombre} no tiene un número de WhatsApp. Agrégalo con "Editar".`);
+      return;
+    }
+    const texto = encodeURIComponent(mensaje);
+    const appUrl = `whatsapp://send?phone=${num}&text=${texto}`;
+    const webUrl = `https://wa.me/${num}?text=${texto}`;
+    setModalCobro(false);
+    Linking.openURL(appUrl).catch(() =>
+      Linking.openURL(webUrl).catch(() =>
+        Alert.alert('No se pudo abrir WhatsApp', 'Revisa que WhatsApp esté instalado.')
+      )
+    );
+  }
+
   return (
     <SafeAreaView style={s.contenedor}>
       <StatusBar barStyle={tema === 'oscuro' ? 'light-content' : 'dark-content'} backgroundColor={paleta.bg} />
@@ -365,6 +446,19 @@ function PerfilContent({ id, tipo }) {
               <Text style={s.btnEliminarTexto}>🗑️  Eliminar</Text>
             </TouchableOpacity>
           </View>
+          {!esTaller && (
+            <TouchableOpacity
+              style={[s.btnGenerarCobro, clasesCobrables.length === 0 && s.btnGenerarCobroOff]}
+              onPress={abrirCobro}
+              disabled={clasesCobrables.length === 0}
+              activeOpacity={0.85}
+            >
+              <FontAwesome name="whatsapp" size={17} color={clasesCobrables.length === 0 ? paleta.onSurfaceVariant : '#fff'} />
+              <Text style={[s.btnGenerarCobroTexto, clasesCobrables.length === 0 && { color: paleta.onSurfaceVariant }]}>
+                Generar cobro
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Registro de clases */}
@@ -563,6 +657,19 @@ function PerfilContent({ id, tipo }) {
                 )}
               </>
             )}
+            {!esTaller && (
+              <>
+                <Text style={s.formLabel}>WhatsApp</Text>
+                <TextInput
+                  style={s.input}
+                  placeholder="+56 9 1234 5678"
+                  placeholderTextColor={paleta.outline}
+                  value={editWhatsapp}
+                  onChangeText={setEditWhatsapp}
+                  keyboardType="phone-pad"
+                />
+              </>
+            )}
             <Text style={s.formLabel}>{esTaller ? 'Valor por alumno (CLP)' : 'Valor de la clase (CLP)'}</Text>
             <TextInput
               style={s.input}
@@ -664,6 +771,50 @@ function PerfilContent({ id, tipo }) {
             <TouchableOpacity style={[s.btnGuardar, { marginTop: 16 }]} onPress={handleGuardarClase}><Text style={s.btnGuardarTexto}>💾 Guardar</Text></TouchableOpacity>
             <TouchableOpacity style={s.btnCancelarInline} onPress={() => setClaseEditando(null)}><Text style={s.btnCancelarTexto}>Cancelar</Text></TouchableOpacity>
           </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Modal generar cobro */}
+      <Modal visible={modalCobro} animationType="slide" transparent onRequestClose={() => setModalCobro(false)}>
+        <View style={s.modalFondo}>
+          <View style={s.modalContenido}>
+            <Text style={s.modalTitulo}>💸 Cobrar a {entidad.nombre}</Text>
+            <Text style={s.cobroSubtitulo}>Selecciona las clases a cobrar</Text>
+            {clasesCobrables.length === 0 ? (
+              <Text style={s.cobroVacio}>No hay clases realizadas pendientes de cobro.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
+                {clasesCobrables.map(c => {
+                  const sel = seleccionCobro.has(c.id);
+                  return (
+                    <TouchableOpacity key={c.id} style={s.cobroItem} onPress={() => toggleCobro(c.id)} activeOpacity={0.7}>
+                      <View style={[s.cobroCheck, sel && s.cobroCheckOn]}>
+                        {sel && <Text style={s.cobroCheckTexto}>✓</Text>}
+                      </View>
+                      <Text style={s.cobroFecha}>{c.fecha} · {c.hora}hs</Text>
+                      <Text style={s.cobroMonto}>${montoDeClase(c).toLocaleString('es-CL')}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+            <View style={s.cobroTotalRow}>
+              <Text style={s.cobroTotalLabel}>Total a cobrar</Text>
+              <Text style={s.cobroTotalValor}>${totalCobro.toLocaleString('es-CL')}</Text>
+            </View>
+            <TouchableOpacity
+              style={[s.btnEnviarWsp, totalCobro === 0 && { opacity: 0.5 }]}
+              onPress={enviarCobro}
+              disabled={totalCobro === 0}
+              activeOpacity={0.85}
+            >
+              <FontAwesome name="whatsapp" size={20} color="#fff" />
+              <Text style={s.btnEnviarWspTexto}>Enviar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.btnCancelarCobro} onPress={() => setModalCobro(false)} activeOpacity={0.85}>
+              <Text style={s.btnCancelarCobroTexto}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -781,5 +932,25 @@ function makeStyles(p) {
     estadoBtnTextoActivo: { color: p.primary },
     estadoBtnReagendada: { borderColor: p.warning + '60' },
     estadoBtnReagendadaActivo: { backgroundColor: p.warning + '20', borderColor: p.warning },
+
+    btnGenerarCobro: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, alignSelf: 'stretch', backgroundColor: '#25D366', borderRadius: 12, paddingVertical: 12, marginTop: 14 },
+    btnGenerarCobroOff: { backgroundColor: p.bgInput, borderWidth: 1, borderColor: p.outlineVariant },
+    btnGenerarCobroTexto: { color: '#fff', fontSize: 14, fontFamily: 'Inter_700Bold' },
+
+    cobroSubtitulo: { color: p.onSurfaceVariant, fontSize: 13, fontFamily: 'Inter_400Regular', textAlign: 'center', marginBottom: 14 },
+    cobroVacio: { color: p.onSurfaceVariant, fontSize: 14, fontFamily: 'Inter_400Regular', textAlign: 'center', paddingVertical: 24 },
+    cobroItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: p.outlineVariant },
+    cobroCheck: { width: 24, height: 24, borderRadius: 7, borderWidth: 2, borderColor: p.outline, alignItems: 'center', justifyContent: 'center' },
+    cobroCheckOn: { backgroundColor: p.primary, borderColor: p.primary },
+    cobroCheckTexto: { color: '#fff', fontSize: 13, fontFamily: 'Inter_700Bold' },
+    cobroFecha: { flex: 1, color: p.onSurface, fontSize: 14, fontFamily: 'Inter_500Medium' },
+    cobroMonto: { color: p.onSurface, fontSize: 14, fontFamily: 'Inter_700Bold' },
+    cobroTotalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, marginTop: 4, borderTopWidth: 1, borderTopColor: p.outlineVariant },
+    cobroTotalLabel: { color: p.onSurfaceVariant, fontSize: 13, fontFamily: 'Inter_600SemiBold' },
+    cobroTotalValor: { color: p.primary, fontSize: 20, fontFamily: 'Inter_800ExtraBold' },
+    btnEnviarWsp: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, alignSelf: 'stretch', backgroundColor: '#25D366', borderRadius: 14, height: 52, marginTop: 6 },
+    btnEnviarWspTexto: { color: '#fff', fontSize: 16, fontFamily: 'Inter_700Bold' },
+    btnCancelarCobro: { alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch', height: 48, marginTop: 8, borderRadius: 14, backgroundColor: p.bgInput, borderWidth: 1, borderColor: p.outlineVariant },
+    btnCancelarCobroTexto: { color: p.onSurfaceVariant, fontSize: 15, fontFamily: 'Inter_600SemiBold' },
   });
 }

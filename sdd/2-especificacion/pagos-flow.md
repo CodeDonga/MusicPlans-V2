@@ -1,5 +1,5 @@
-# Especificación — Pagos (Flow)
-> Estado: PENDIENTE DE IMPLEMENTACIÓN
+# Especificación — Pagos con pasarela (Flow → Khipu)
+> Estado: ⏸️ POSPUESTO (2026-06-13). La v1 cobra por transferencia manual asistida — ver `cobro-transferencia.md`. Este documento queda como diseño de referencia para cuando se retome la pasarela automática (Khipu ya investigado; reescribir endpoints/firma/reembolso contra su API v3). El toggle manual de `pagada` se mantiene mientras tanto.
 > Módulos a crear: `app/(tabs)/perfil.jsx` (modal), `app/pago/[token].jsx` (vista pública), Edge Function webhook, tabla `pagos` + `pagos_clases` en Supabase.
 
 ---

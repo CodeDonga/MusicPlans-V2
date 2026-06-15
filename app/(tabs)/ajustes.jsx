@@ -6,9 +6,19 @@ import { useTema } from '../../context/TemaContext';
 import { useAuth } from '../../context/AuthContext';
 import { useAlumnos } from '../../context/AlumnosContext';
 
+// CT-01: instituciones a las que se puede transferir en Chile y tipos de cuenta.
+const BANCOS_CHILE = [
+  'BancoEstado', 'Banco de Chile / Edwards', 'Banco Santander', 'Banco BCI',
+  'Banco Itaú', 'Scotiabank', 'Scotiabank Azul', 'Banco BICE', 'Banco Security',
+  'Banco Falabella', 'Banco Ripley', 'Banco Consorcio', 'Banco Internacional',
+  'Banco BTG Pactual', 'HSBC Bank', 'Coopeuch', 'Prepago Los Héroes',
+  'Tenpo', 'Mercado Pago', 'MACH', 'Tapp Caja Los Andes',
+];
+const TIPOS_CUENTA = ['Cuenta Corriente', 'Cuenta Vista', 'Cuenta de Ahorro', 'Chequera Electrónica'];
+
 export default function Ajustes() {
   const { tema, paleta, toggleTema } = useTema();
-  const { signOut, session, updatePerfil, conectarCalendar, desconectarCalendar, getCalendarToken } = useAuth();
+  const { signOut, session, updatePerfil, updateDatosCobro, conectarCalendar, desconectarCalendar, getCalendarToken } = useAuth();
   const { sincronizarClasesExistentes } = useAlumnos();
 
   const [fontsLoaded] = useFonts({ Inter_400Regular, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold });
@@ -16,6 +26,18 @@ export default function Ajustes() {
   const [nombre, setNombre] = useState(session?.user?.user_metadata?.nombre || '');
   const [guardando, setGuardando] = useState(false);
   const [conectandoCalendar, setConectandoCalendar] = useState(false);
+
+  const dc = session?.user?.user_metadata?.datos_cobro || {};
+  const [titular, setTitular] = useState(dc.titular || '');
+  const [rut, setRut] = useState(dc.rut || '');
+  const [banco, setBanco] = useState(dc.banco || '');
+  const [tipoCuenta, setTipoCuenta] = useState(dc.tipo_cuenta || '');
+  const [numeroCuenta, setNumeroCuenta] = useState(dc.numero_cuenta || '');
+  const [emailCobro, setEmailCobro] = useState(dc.email || '');
+  const [mostrarBancos, setMostrarBancos] = useState(false);
+  const [mostrarTipos, setMostrarTipos] = useState(false);
+  const [guardandoCobro, setGuardandoCobro] = useState(false);
+
   const email = session?.user?.email || '';
   const calendarConectado = !!getCalendarToken();
 
@@ -56,6 +78,29 @@ export default function Ajustes() {
       Alert.alert('Error', e.message || 'No se pudo actualizar el perfil.');
     } finally {
       setGuardando(false);
+    }
+  }
+
+  async function handleGuardarCobro() {
+    if (!titular.trim() || !rut.trim() || !banco || !tipoCuenta || !numeroCuenta.trim()) {
+      Alert.alert('Faltan datos', 'Completa nombre, RUT, banco, tipo de cuenta y número de cuenta.');
+      return;
+    }
+    setGuardandoCobro(true);
+    try {
+      await updateDatosCobro({
+        titular: titular.trim(),
+        rut: rut.trim(),
+        banco,
+        tipo_cuenta: tipoCuenta,
+        numero_cuenta: numeroCuenta.trim(),
+        email: emailCobro.trim(),
+      });
+      Alert.alert('Datos de cobro guardados', 'Se incluirán en tus mensajes de cobro por WhatsApp.');
+    } catch (e) {
+      Alert.alert('Error', e.message || 'No se pudieron guardar los datos.');
+    } finally {
+      setGuardandoCobro(false);
     }
   }
 
@@ -106,6 +151,85 @@ export default function Ajustes() {
             {guardando
               ? <ActivityIndicator color="#ffffff" size="small" />
               : <Text style={s.btnGuardarTexto}>Guardar cambios</Text>
+            }
+          </TouchableOpacity>
+        </View>
+
+        {/* Datos de cobro */}
+        <Text style={s.grupoLabel}>Datos de cobro</Text>
+        <View style={s.card}>
+          <View style={s.campoRow}>
+            <Text style={s.campoIcon}>👤</Text>
+            <View style={s.campoInner}>
+              <Text style={s.campoLabel}>Nombre</Text>
+              <TextInput style={s.input} value={titular} onChangeText={setTitular} placeholder="Nombre del titular" placeholderTextColor={paleta.onSurfaceVariant} />
+            </View>
+          </View>
+          <View style={s.divisor} />
+          <View style={s.campoRow}>
+            <Text style={s.campoIcon}>🪪</Text>
+            <View style={s.campoInner}>
+              <Text style={s.campoLabel}>RUT</Text>
+              <TextInput style={s.input} value={rut} onChangeText={setRut} placeholder="12.345.678-9" placeholderTextColor={paleta.onSurfaceVariant} autoCapitalize="none" />
+            </View>
+          </View>
+          <View style={s.divisor} />
+          <TouchableOpacity style={s.campoRow} onPress={() => { setMostrarBancos(!mostrarBancos); setMostrarTipos(false); }} activeOpacity={0.7}>
+            <Text style={s.campoIcon}>🏦</Text>
+            <View style={s.campoInner}>
+              <Text style={s.campoLabel}>Banco</Text>
+              <Text style={banco ? s.selectorValor : s.selectorPlaceholder}>{banco || 'Selecciona tu banco'}</Text>
+            </View>
+            <Text style={s.opcionFlecha}>{mostrarBancos ? '▲' : '▼'}</Text>
+          </TouchableOpacity>
+          {mostrarBancos && (
+            <View style={s.dropdownLista}>
+              {BANCOS_CHILE.map(b => (
+                <TouchableOpacity key={b} style={s.dropdownOpcion} onPress={() => { setBanco(b); setMostrarBancos(false); }} activeOpacity={0.7}>
+                  <Text style={[s.dropdownOpcionTexto, banco === b && s.dropdownOpcionTextoActivo]}>{b}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          <View style={s.divisor} />
+          <TouchableOpacity style={s.campoRow} onPress={() => { setMostrarTipos(!mostrarTipos); setMostrarBancos(false); }} activeOpacity={0.7}>
+            <Text style={s.campoIcon}>💳</Text>
+            <View style={s.campoInner}>
+              <Text style={s.campoLabel}>Tipo de cuenta</Text>
+              <Text style={tipoCuenta ? s.selectorValor : s.selectorPlaceholder}>{tipoCuenta || 'Selecciona el tipo'}</Text>
+            </View>
+            <Text style={s.opcionFlecha}>{mostrarTipos ? '▲' : '▼'}</Text>
+          </TouchableOpacity>
+          {mostrarTipos && (
+            <View style={s.dropdownLista}>
+              {TIPOS_CUENTA.map(t => (
+                <TouchableOpacity key={t} style={s.dropdownOpcion} onPress={() => { setTipoCuenta(t); setMostrarTipos(false); }} activeOpacity={0.7}>
+                  <Text style={[s.dropdownOpcionTexto, tipoCuenta === t && s.dropdownOpcionTextoActivo]}>{t}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+          <View style={s.divisor} />
+          <View style={s.campoRow}>
+            <Text style={s.campoIcon}>#️⃣</Text>
+            <View style={s.campoInner}>
+              <Text style={s.campoLabel}>N° de cuenta</Text>
+              <TextInput style={s.input} value={numeroCuenta} onChangeText={setNumeroCuenta} placeholder="000123456789" placeholderTextColor={paleta.onSurfaceVariant} keyboardType="numeric" />
+            </View>
+          </View>
+          <View style={s.divisor} />
+          <View style={s.campoRow}>
+            <Text style={s.campoIcon}>✉️</Text>
+            <View style={s.campoInner}>
+              <Text style={s.campoLabel}>Email (opcional)</Text>
+              <TextInput style={s.input} value={emailCobro} onChangeText={setEmailCobro} placeholder="tu@email.com" placeholderTextColor={paleta.onSurfaceVariant} keyboardType="email-address" autoCapitalize="none" />
+            </View>
+          </View>
+          <View style={s.divisor} />
+          <TouchableOpacity style={s.btnGuardar} onPress={handleGuardarCobro} activeOpacity={0.8} disabled={guardandoCobro}>
+            {guardandoCobro
+              ? <ActivityIndicator color="#ffffff" size="small" />
+              : <Text style={s.btnGuardarTexto}>Guardar datos de cobro</Text>
             }
           </TouchableOpacity>
         </View>
@@ -241,6 +365,12 @@ function makeStyles(p) {
     opcionTextoActivo: { color: p.primary, fontFamily: 'Inter_600SemiBold' },
     opcionCheck: { color: p.primary, fontSize: 16, fontFamily: 'Inter_700Bold' },
     opcionFlecha: { color: p.onSurfaceVariant, fontSize: 20 },
+    selectorValor: { color: p.onSurface, fontSize: 15, fontFamily: 'Inter_400Regular' },
+    selectorPlaceholder: { color: p.onSurfaceVariant, fontSize: 15, fontFamily: 'Inter_400Regular' },
+    dropdownLista: { backgroundColor: p.bgInput, marginHorizontal: 16, marginTop: 4, borderRadius: 10, borderWidth: 1, borderColor: p.outlineVariant, overflow: 'hidden' },
+    dropdownOpcion: { paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: p.outlineVariant },
+    dropdownOpcionTexto: { color: p.onSurface, fontSize: 14, fontFamily: 'Inter_400Regular' },
+    dropdownOpcionTextoActivo: { color: p.primary, fontFamily: 'Inter_700Bold' },
     divisor: { height: 1, backgroundColor: p.outlineVariant, marginHorizontal: 16 },
     btnCerrarSesion: { marginTop: 32, backgroundColor: p.alertFaint, borderRadius: 14, height: 52, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: p.alert },
     btnCerrarSesionTexto: { color: p.alert, fontSize: 15, fontFamily: 'Inter_700Bold' },
