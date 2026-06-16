@@ -9,6 +9,7 @@ import { useAlumnos } from '../../context/AlumnosContext';
 import { useTema } from '../../context/TemaContext';
 import { useAuth } from '../../context/AuthContext';
 import { parseFecha, isSameDay } from '../../lib/fechas';
+import { montoDeClase } from '../../lib/montos';
 
 const ESTADOS = ['pendiente', 'realizada', 'cancelada', 'reagendada'];
 const ESTADO_LABEL = { pendiente: 'Pendiente', realizada: 'Realizada', cancelada: 'Cancelada', reagendada: 'Reagendada' };
@@ -338,12 +339,16 @@ function PerfilContent({ id, tipo }) {
 
   // --- Cobro por transferencia (CT) ---
   const nParticipantes = esTaller ? Math.max(1, entidad.participantes?.length || 1) : 1;
-  const valorPorDefecto = esTaller
-    ? (entidad.valorPorAlumno || 0) * (entidad.participantes?.length || 1)
-    : (entidad.valorClase || 0);
-  const montoDeClase = (c) => c.valorCustom ?? (c.valorUnitario || valorPorDefecto);
-  // En taller cada participante paga su parte del total de la clase.
-  const montoCobro = (c) => esTaller ? Math.round(montoDeClase(c) / nParticipantes) : montoDeClase(c);
+  // BUG-37: la parte del participante es el valor_por_alumno ACTUAL del taller; si la
+  // clase tiene un valor_custom (override del total), se reparte ese total entre los
+  // participantes actuales. NO se usa el valor_unitario guardado (calculado con el
+  // roster del momento de creación) dividido por el nº actual → daría un cobro errado.
+  const montoCobro = (c) => {
+    if (!esTaller) return montoDeClase(c, entidad);
+    return c.valorCustom != null
+      ? Math.round(c.valorCustom / nParticipantes)
+      : (entidad.valorPorAlumno || 0);
+  };
   // Destinatario del mensaje: el alumno, o el participante elegido en el taller.
   const destinatario = esTaller ? participanteCobro : entidad;
   const clasesCobrables = clasesEntidad.filter(c => c.estado === 'realizada' && !c.pagada);
@@ -417,9 +422,15 @@ function PerfilContent({ id, tipo }) {
     if (seleccionadas.length === 0 || !destinatario) return;
     const mensaje = construirMensajeCobro(seleccionadas);
     let num = (destinatario.whatsapp || '').replace(/\D/g, '');
-    if (num.length === 9 && num.startsWith('9')) num = '56' + num; // CL sin código país
     if (!num) {
       Alert.alert('Sin WhatsApp', `${destinatario.nombre} no tiene un número de WhatsApp. Agrégalo con "Editar".`);
+      return;
+    }
+    // BUG-45: normalización robusta. Si ya trae código país (56…) se respeta; si no,
+    // se antepone 56 (Chile). Un móvil chileno válido queda en 11 dígitos (569XXXXXXXX).
+    if (!num.startsWith('56')) num = '56' + num;
+    if (num.length < 11) {
+      Alert.alert('WhatsApp inválido', `El número de ${destinatario.nombre} no parece válido. Edítalo e inténtalo de nuevo.`);
       return;
     }
     const texto = encodeURIComponent(mensaje);

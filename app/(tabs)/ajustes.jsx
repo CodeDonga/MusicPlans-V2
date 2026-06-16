@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, StatusBar, TextInput, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts, Inter_400Regular, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold } from '@expo-google-fonts/inter';
@@ -37,6 +37,22 @@ export default function Ajustes() {
   const [mostrarBancos, setMostrarBancos] = useState(false);
   const [mostrarTipos, setMostrarTipos] = useState(false);
   const [guardandoCobro, setGuardandoCobro] = useState(false);
+
+  // BUG-46: en cold-start directo a Ajustes la sesión puede resolver DESPUÉS del primer
+  // render, dejando los useState sembrados en vacío. Cuando aparece la sesión (cambia
+  // user.id) re-sembramos los campos desde los datos guardados. No pisa ediciones
+  // posteriores: user.id es estable tras el login, así que no vuelve a dispararse.
+  useEffect(() => {
+    const meta = session?.user?.user_metadata || {};
+    setNombre(meta.nombre || '');
+    const d = meta.datos_cobro || {};
+    setTitular(d.titular || '');
+    setRut(d.rut || '');
+    setBanco(d.banco || '');
+    setTipoCuenta(d.tipo_cuenta || '');
+    setNumeroCuenta(d.numero_cuenta || '');
+    setEmailCobro(d.email || '');
+  }, [session?.user?.id]);
 
   const email = session?.user?.email || '';
   const calendarConectado = !!getCalendarToken();

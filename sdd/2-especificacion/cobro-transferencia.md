@@ -61,7 +61,10 @@ Un taller no tiene un WhatsApp único y cada participante paga **su parte** (`va
 
 - [ ] "Generar cobro" en el perfil del taller abre primero un **selector de participante** (lista de `entidad.participantes`, hidratados desde `alumnos` para tomar su `whatsapp`).
 - [ ] Elegido el participante, se abre el modal de selección de clases ya existente, pero:
-  - El monto por clase es **la parte del participante**: `montoDeClase(c) / nº de participantes`, redondeado a entero (CLP). Así la suma de las partes cuadra con el total de la clase, ya sea valor calculado o `valor_custom`.
+  - El monto por clase es **la parte del participante**:
+    - Clase sin `valor_custom` → cada participante paga `valor_por_alumno` **actual** del taller (precio por cabeza vigente).
+    - Clase con `valor_custom` (override del total de esa clase) → la parte es `round(valor_custom / nº de participantes actual)`, de modo que la suma de las partes cuadra con el total override.
+    - **Nota (BUG-37):** no se usa el `valor_unitario` guardado dividido por el nº actual de participantes — ese total fue calculado con el roster del momento de creación y daría una parte incorrecta si luego cambió el nº de participantes o el precio.
   - El mensaje y el envío de WhatsApp van al **participante seleccionado** (su `nombre` y su `whatsapp`), no al taller.
 - [ ] Para cobrar a otro participante, se repite el flujo (un mensaje por participante).
 - [ ] **Limitación v1 conocida:** la confirmación del pago sigue siendo el toggle `pagada`, que es **por clase**, no por participante. Si en una clase del taller pagan unos sí y otros no, el profesor no puede reflejarlo a nivel de participante en v1 (ver caso borde). El registro por participante es una mejora futura (requeriría infraestructura).
@@ -71,7 +74,7 @@ Un taller no tiene un WhatsApp único y cada participante paga **su parte** (`va
 - [ ] Al presionar "Generar cobro", se abre un modal:
   - Título: "Cobrar a {nombre}".
   - Lista de clases `realizada` + `pagada = false`, ordenadas por fecha descendente.
-  - Cada fila: checkbox + fecha (`DD/MM/YYYY`) + hora + monto (`$X.XXX`, usando `valor_custom ?? valor_unitario`).
+  - Cada fila: checkbox + fecha (`DD/MM/YYYY`) + hora + monto (`$X.XXX`). El monto por clase de un alumno se calcula con el helper compartido `montoDeClase(clase, entidad)` de `lib/montos.js` (`valor_custom ?? (valor_unitario || valor por defecto de la entidad)`), **el mismo** que usa Finanzas, para que el cobro y el reporte nunca difieran (BUG-43).
   - **Default:** todas preseleccionadas.
   - Pie: "Total a cobrar: $XX.XXX" (suma viva según selección).
   - Botones: **"Cancelar"** y **"Generar mensaje"** (primario, deshabilitado si no hay ninguna seleccionada).

@@ -33,7 +33,7 @@
 
 ### Conectar (desde Ajustes)
 - [ ] **Verificar primero:** al tocar "Conectar", la app intenta obtener un access token usando el refresh token guardado. Si lo logra, queda **conectada sin abrir Google** (sin selector de cuenta ni consentimiento).
-- [ ] **Si no hay token utilizable**, abre el flujo OAuth con: scope `calendar.events`, `access_type=offline`, `login_hint`=email del usuario (preselecciona la cuenta). **No** se fuerza `prompt=consent` (Google lo muestra solo la primera vez que se otorga el scope).
+- [ ] **Si no hay token utilizable**, abre el flujo OAuth con: scope `calendar.events`, `access_type=offline`, `login_hint`=email del usuario (preselecciona la cuenta, salta el selector) y `prompt=consent`. **Se fuerza `prompt=consent` en este fallback** (BUG-38): el flujo OAuth solo se abre cuando no hay refresh token utilizable (primer connect o tras revocar el acceso en Google), y con el scope ya concedido Google **no** reemite `provider_refresh_token` salvo que se pida consentimiento — sin esto, reconectar tras una revocación no recupera el refresh token y la sync muere al expirar el access token (~55 min). No agrega fricción al reconnect normal: ese caso lo resuelve el verify-first sin abrir Google.
 - [ ] Al conectar con éxito: se guarda el refresh token (server-side, §4), se marca `google_calendar_connected=true` y se dispara una **sincronización completa** (§5).
 
 ### Desconectar
@@ -150,7 +150,9 @@ Recorre las clases de los alumnos/talleres **existentes**. Para cada una:
 
 > **Paso 1 — Consolidación (hecho 2026-06-15).** La lógica de "reflejar una clase en Calendar", antes duplicada en 5 lugares, se unificó en una sola función `reflejarClaseEnCalendar(entidadId, clase, entidad)` (núcleo puro `aplicarEventoDeClase`). La usan `agregarClase`, `editarClase` y `cambiarEstadoClase`. Mapeo de estados §6 verificado contra el código. Manejo de token unificado (`safeGCal`).
 >
+> **Code-review + correcciones (2026-06-16, BUG-37..46).** `sincronizarClasesExistentes` ahora también enruta por `aplicarEventoDeClase` (unifica el manejo de error vía `safeGCal` y **borra los eventos de clases canceladas** con id — antes las salteaba, dejando huérfanos; BUG-39/44). Robustez añadida: el branch `cancelada` de `aplicarEventoDeClase` **no limpia el id si el DELETE falla** (BUG-40); toda operación de Calendar se **gatea con el flag de conexión** antes de invocar la Edge Function (BUG-41); la cancelación en `cambiarEstadoClase` ya no depende del objeto en memoria (BUG-42); y el fallback OAuth fuerza `prompt=consent` (BUG-38, §3).
+>
 > Brechas que faltan cerrar:
-> - **GC-09:** etiquetar eventos con `mp_clase_id` + reconciliación por `events.list` (hoy `sincronizarClasesExistentes` aún depende del id guardado, hace PATCH por clase y **no borra eventos de clases canceladas**). Esta función todavía no pasó por el Paso 1.
+> - **GC-09 (parcial):** falta etiquetar eventos con `mp_clase_id` + reconciliación por `events.list` (hoy la sync sigue leyendo el id por lote de la DB y verificando con PATCH por clase, pero ya borra canceladas y reusa el núcleo). El etiquetado para re-adoptar eventos huérfanos sin id sigue pendiente.
 > - **GC-10:** sincronizar al abrir la app / foreground (hoy solo al conectar).
 > - **GC-11:** botón "Sincronizar ahora" en Ajustes.

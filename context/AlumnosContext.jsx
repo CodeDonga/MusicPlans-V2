@@ -10,7 +10,7 @@ import { logWarn } from '../lib/log';
 const AlumnosContext = createContext(null);
 
 export function AlumnosProvider({ children }) {
-  const { session, getCalendarAccessToken, clearProviderToken } = useAuth();
+  const { session, getCalendarAccessToken, getCalendarToken, clearProviderToken } = useAuth();
   const [alumnos, setAlumnos] = useState([]);
   const [talleres, setTalleres] = useState([]);
   const [clases, setClases] = useState({});
@@ -212,7 +212,13 @@ export function AlumnosProvider({ children }) {
   async function aplicarEventoDeClase(token, clase, entidad, idActual) {
     const nombre = entidad?.nombre || '';
     if (clase.estado === 'cancelada') {
-      if (idActual) await safeGCal(() => eliminarEvento(token, idActual));
+      if (idActual) {
+        // BUG-40: solo limpiar el id si el DELETE confirma éxito (true, o 404/410 =
+        // ya no existe). Si falla (5xx/red), conservar idActual para reintentar en la
+        // próxima sync — si no, el evento queda en Calendar sin id rastreable.
+        const ok = await safeGCal(() => eliminarEvento(token, idActual));
+        if (!ok) return idActual;
+      }
       return null;
     }
     if (idActual) {
@@ -226,6 +232,8 @@ export function AlumnosProvider({ children }) {
   // al estado que dicta su `estado` y persiste el google_event_id resultante en DB
   // y en memoria. La DB es la fuente de verdad del id (BUG-29).
   async function reflejarClaseEnCalendar(entidadId, clase, entidad) {
+    // BUG-41: no tocar Calendar (ni invocar la Edge Function) si no está conectado.
+    if (!getCalendarToken()) return;
     const token = await getGoogleToken();
     if (!token) return;
     const idActual = await eventoIdDesdeDB(clase.id);
@@ -271,6 +279,7 @@ export function AlumnosProvider({ children }) {
     clasesBorradas.forEach(c => cancelarNotificacion(c.id));
     const conEvento = clasesBorradas.filter(c => c.googleEventId);
     if (conEvento.length === 0) return;
+    if (!getCalendarToken()) return; // BUG-41: sin Calendar conectado, no invocar la Edge Function
     const token = await getGoogleToken();
     if (!token) return;
     for (const c of conEvento) {
@@ -466,7 +475,7 @@ export function AlumnosProvider({ children }) {
     const { error } = await supabase.from('clases').delete().eq('id', claseId);
     if (error) return;
     cancelarNotificacion(claseId);
-    if (googleEventId) {
+    if (googleEventId && getCalendarToken()) { // BUG-41: solo si Calendar está conectado
       const token = await getGoogleToken();
       if (token) await safeGCal(() => eliminarEvento(token, googleEventId));
       else logWarn('gcal', 'sin token para eliminar evento de clase', { claseId });
@@ -494,7 +503,12 @@ export function AlumnosProvider({ children }) {
     }
     // El evento solo cambia de presencia al cancelar (se borra) o al reactivar una
     // cancelada (se recrea); el resto de transiciones no afecta el evento.
-    if (clase && (estado === 'cancelada' || estadoPrevio === 'cancelada')) {
+    // BUG-42: la cancelación no depende del objeto en memoria — borrar solo necesita
+    // el id (que aplicarEventoDeClase lee de la DB). La reactivación sí requiere la
+    // clase en memoria para recrear el evento con su fecha/hora/contenido.
+    if (estado === 'cancelada') {
+      await reflejarClaseEnCalendar(entidadId, { id: claseId, estado }, entidad);
+    } else if (estadoPrevio === 'cancelada' && clase) {
       await reflejarClaseEnCalendar(entidadId, { ...clase, estado }, entidad);
     }
   }
@@ -524,9 +538,12 @@ export function AlumnosProvider({ children }) {
   }
 
   async function sincronizarClasesExistentes() {
+    // BUG-41: no invocar la Edge Function si Calendar no está conectado.
+    if (!getCalendarToken()) return 0;
     const token = await getGoogleToken();
     if (!token) return 0;
 
+    // BUG-29/33: la DB es la única fuente de verdad del id. Se lee por lote.
     const { data: filasDB } = await supabase
       .from('clases')
       .select('id, google_event_id')
@@ -540,31 +557,18 @@ export function AlumnosProvider({ children }) {
       if (!entidad) continue;
 
       for (const clase of clasesEntidad) {
-        if (clase.estado === 'cancelada') continue;
-        // BUG-32: se sincronizan también las clases pasadas — debe aparecer todo el historial.
-        if (!parseFecha(clase.fecha)) continue;
+        // Las canceladas SÍ se procesan: si tienen evento, hay que borrarlo (BUG-39).
+        // Solo se saltan las no-canceladas con fecha inválida (no se puede crear evento).
+        // BUG-32: las pasadas se sincronizan igual — debe aparecer todo el historial.
+        if (clase.estado !== 'cancelada' && !parseFecha(clase.fecha)) continue;
 
-        // BUG-29/33: la DB es la única fuente de verdad del id (no el id en memoria).
-        const idDB = eventosDB.get(clase.id);
-
-        try {
-          if (idDB) {
-            // BUG-34: si la clase ya tiene un id, verificar que el evento siga
-            // existiendo en Calendar. editarEvento devuelve 'gone' (404/410) si el
-            // usuario lo borró → se recrea; si existe, se actualiza y se salta.
-            const r = await editarEvento(token, idDB, clase, entidad.nombre);
-            if (r !== 'gone') continue;
-          }
-          const googleEventId = await crearEvento(token, clase, entidad.nombre);
-          if (googleEventId) {
-            await persistirEventoId(clase.id, googleEventId);
-            actualizaciones.push({ entidadId, claseId: clase.id, googleEventId });
-          }
-        } catch (e) {
-          if (e.message === 'TOKEN_EXPIRADO') {
-            clearProviderToken();
-            return actualizaciones.length;
-          }
+        const idActual = eventosDB.get(clase.id) ?? null;
+        // BUG-44: mismo núcleo que las mutaciones (crea/edita/recrea/borra-cancelada y
+        // maneja el token vía safeGCal). No reimplementar la lógica de reconciliación.
+        const idNuevo = await aplicarEventoDeClase(token, clase, entidad, idActual);
+        if (idNuevo !== idActual) {
+          await persistirEventoId(clase.id, idNuevo);
+          actualizaciones.push({ entidadId, claseId: clase.id, googleEventId: idNuevo });
         }
       }
     }

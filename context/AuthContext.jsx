@@ -137,8 +137,12 @@ export function AuthProvider({ children }) {
       return true
     }
     // 2) Si no hay token utilizable, autorizar con Google. login_hint preselecciona
-    // la cuenta del usuario (salta el selector); sin prompt:consent salvo que Google
-    // lo exija por ser un scope nuevo. access_type:offline para recibir refresh token.
+    // la cuenta del usuario (salta el selector). BUG-38: este fallback solo se abre
+    // cuando NO hay refresh token utilizable (primer connect o tras revocar en Google);
+    // con el scope ya concedido, Google no reemite provider_refresh_token salvo que se
+    // fuerce prompt:consent → sin esto, reconectar tras una revocación no recupera el
+    // refresh token y la sync muere al expirar el access token. No agrega fricción al
+    // reconnect normal: ese caso lo resuelve el verify-first sin abrir Google.
     const redirectUrl = OAUTH_REDIRECT
     const email = session?.user?.email
     const { data, error } = await supabase.auth.signInWithOAuth({
@@ -147,7 +151,7 @@ export function AuthProvider({ children }) {
         redirectTo: redirectUrl,
         skipBrowserRedirect: true,
         scopes: 'https://www.googleapis.com/auth/calendar.events',
-        queryParams: { access_type: 'offline', ...(email ? { login_hint: email } : {}) },
+        queryParams: { access_type: 'offline', prompt: 'consent', ...(email ? { login_hint: email } : {}) },
       },
     })
     if (error) throw error

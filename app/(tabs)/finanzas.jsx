@@ -6,6 +6,7 @@ import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_7
 import { useAlumnos } from '../../context/AlumnosContext';
 import { useTema } from '../../context/TemaContext';
 import { parseFecha } from '../../lib/fechas';
+import { valorPorDefecto, montoDeClase } from '../../lib/montos';
 
 export default function Finanzas() {
   const router = useRouter();
@@ -49,15 +50,15 @@ export default function Finanzas() {
 
   const resumen = [...alumnos, ...talleres].map(entidad => {
     const clasesEntidad = (clases[entidad.id] || []).filter(esDelMes);
-    const valor = entidad.tipo === 'taller'
-      ? (entidad.valorPorAlumno || 0) * (entidad.participantes?.length || 1)
-      : (entidad.valorClase || 0);
+    const valor = valorPorDefecto(entidad);
     const clasesRealizadas = clasesEntidad.filter(c => c.estado === 'realizada');
     const pendientes = clasesEntidad.filter(c => c.estado === 'pendiente').length;
     const realizadas = clasesRealizadas.length;
     const pagadas = clasesRealizadas.filter(c => c.pagada).length;
-    const ingresoGenerado = clasesRealizadas.reduce((acc, c) => acc + (c.valorCustom ?? valor), 0);
-    const ingresoCobrado = clasesRealizadas.filter(c => c.pagada).reduce((acc, c) => acc + (c.valorCustom ?? valor), 0);
+    // BUG-43: mismo cálculo de monto que el cobro (lib/montos), para que Finanzas y
+    // el mensaje de WhatsApp nunca difieran. Usa el valor_unitario histórico por clase.
+    const ingresoGenerado = clasesRealizadas.reduce((acc, c) => acc + montoDeClase(c, entidad), 0);
+    const ingresoCobrado = clasesRealizadas.filter(c => c.pagada).reduce((acc, c) => acc + montoDeClase(c, entidad), 0);
     const ingresoPorCobrar = ingresoGenerado - ingresoCobrado;
     return { entidad, realizadas, pendientes, pagadas, ingresoGenerado, ingresoCobrado, ingresoPorCobrar, valor, eliminado: false };
   }).filter(r => r.realizadas > 0 || r.pendientes > 0);
